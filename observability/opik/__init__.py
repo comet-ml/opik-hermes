@@ -602,10 +602,6 @@ def _finish_trace(task_key: str, *, output: Any = None) -> None:
             pass
 
 
-def _assistant_has_tool_calls(message: Any) -> bool:
-    return bool(getattr(message, "tool_calls", None))
-
-
 def _request_key(api_call_count: Any) -> str:
     return str(api_call_count or 0)
 
@@ -720,7 +716,23 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
     with _STATE_LOCK:
         state = _TRACE_STATE.get(task_key)
         generation = state.generations.pop(req_key, None) if state else None
-    if state is None or generation is None:
+
+    # Two callers share this handler:
+    #   - post_api_request: per-API-call. Carries a generation span we opened in
+    #     on_pre_llm_request (matched by req_key); we close that span here.
+    #   - post_llm_call: per-TURN, fired once after the tool loop completes
+    #     (agent/turn_finalizer.py). It carries `assistant_response` but no
+    #     api_call_count, so it never matches a generation. This is the only
+    #     reliable end-of-turn signal — finalize the root trace here, otherwise
+    #     the trace is never .end()-ed and never surfaces as completed in Opik.
+    if generation is None:
+        if state is not None and assistant_response is not None:
+            _finish_trace(
+                task_key,
+                output={"content": _safe_value(assistant_response)},
+            )
+        return
+    if state is None:
         return
 
     if assistant_message is not None:
@@ -787,10 +799,10 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
         metadata=gen_metadata,
     )
 
-    has_tools = _assistant_has_tool_calls(assistant_message) if assistant_message else (assistant_tool_call_count > 0)
-    has_content = bool(output.get("content"))
-    if not has_tools and has_content:
-        _finish_trace(task_key, output=output)
+    # NOTE: the root trace is finalized by the per-turn post_llm_call signal
+    # (see the generation-is-None branch above), NOT here. Finalizing on a
+    # per-API-call content heuristic would close the trace mid-turn — before
+    # later tool calls / API calls in the same turn are recorded.
 
 
 def on_pre_tool_call(*, tool_name: str = "", args: Any = None, task_id: str = "",
