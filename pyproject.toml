@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opik-hermes"
+version = "0.1.0"
+description = "Opik observability plugin for the Hermes agent — traces conversations, LLM calls, and tool usage to Opik."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Comet" }]
+dependencies = [
+    "opik>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/comet-ml/opik-hermes"
+Repository = "https://github.com/comet-ml/opik-hermes"
+
+# Hermes discovers pip-installed plugins via this entry-point group. The
+# value points at the package's register(ctx) entry module.
+[project.entry-points."hermes_agent.plugins"]
+opik = "opik_hermes:register"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["opik_hermes"]
+
+[tool.setuptools.package-dir]
+opik_hermes = "observability/opik"

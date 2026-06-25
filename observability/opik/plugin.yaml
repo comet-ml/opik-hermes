@@ -1,0 +1,13 @@
+name: opik
+version: "0.1.0"
+description: "Opik observability for Hermes — traces conversations, LLM calls, and tool usage to Opik. Opt-in via `hermes plugins enable observability/opik` or `hermes tools → Opik Observability`."
+author: Comet
+requires_env:
+  - OPIK_API_KEY
+hooks:
+  - pre_api_request
+  - post_api_request
+  - pre_llm_call
+  - post_llm_call
+  - pre_tool_call
+  - post_tool_call
