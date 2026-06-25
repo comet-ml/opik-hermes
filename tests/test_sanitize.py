@@ -1,4 +1,5 @@
 """Payload sanitization helpers: truncation, base64 redaction, read_file, json."""
+
 from __future__ import annotations
 
 
@@ -70,7 +71,9 @@ def test_read_file_payload_detected_and_normalized(plugin):
         "is_image": False,
     }
     assert plugin._looks_like_read_file_payload(payload)
-    norm = plugin._normalize_read_file_payload(payload, args={"path": "/x", "offset": 0})
+    norm = plugin._normalize_read_file_payload(
+        payload, args={"path": "/x", "offset": 0}
+    )
     assert norm["path"] == "/x"
     assert norm["returned_lines"]["count"] == 2
     assert norm["total_lines"] == 2

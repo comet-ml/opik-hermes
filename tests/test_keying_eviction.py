@@ -1,4 +1,5 @@
 """Trace-key scoping precedence and LRU eviction at the state cap."""
+
 from __future__ import annotations
 
 
@@ -33,8 +34,12 @@ def test_lru_eviction_bounds_state_and_ends_evicted_trace(plugin):
     # Open cap+5 distinct turns; each opens a root trace via pre_llm_request.
     for i in range(cap + 5):
         plugin.on_pre_llm_request(
-            task_id="t", session_id="s", turn_id=f"T{i}", api_call_count=1,
-            messages=[{"role": "user", "content": f"m{i}"}], model="gpt-5",
+            task_id="t",
+            session_id="s",
+            turn_id=f"T{i}",
+            api_call_count=1,
+            messages=[{"role": "user", "content": f"m{i}"}],
+            model="gpt-5",
         )
     # State never exceeds the cap...
     assert len(plugin._TRACE_STATE) <= cap
