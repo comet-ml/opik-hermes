@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package + dev deps
+        run: pip install -e ".[dev]"
+      - name: Run tests
+        run: python -m pytest tests/ -v
+
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        run: ruff check observability tests
+      # NOTE: `ruff format --check` is intentionally NOT enforced yet — the
+      # plugin was ported from the upstream Langfuse plugin's formatting. A
+      # one-time `ruff format` reformat is deferred to the refactor PR.
+
+  build:
+    name: build (package + entry point)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          pip install build
+          python -m build
+      - name: Verify the wheel exposes the plugin entry point
+        run: |
+          python - <<'PY'
+          import glob, zipfile, sys
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          assert "opik_hermes/__init__.py" in names, "plugin module missing from wheel"
+          ep = next(n for n in names if n.endswith("entry_points.txt"))
+          body = zipfile.ZipFile(wheel).read(ep).decode()
+          assert "hermes_agent.plugins" in body, "hermes_agent.plugins entry point missing"
+          assert "opik_hermes:register" in body, "register entry point missing"
+          print("OK:", wheel)
+          PY
