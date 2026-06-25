@@ -6,6 +6,7 @@ and is loaded by Hermes via ``spec_from_file_location`` under the module name
 each test gets a freshly-loaded module instance (so module-global trace state
 and the cached client don't leak between tests), wired to a fake Opik client.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -15,7 +16,9 @@ from typing import Any
 
 import pytest
 
-PLUGIN_PATH = Path(__file__).resolve().parent.parent / "observability" / "opik" / "__init__.py"
+PLUGIN_PATH = (
+    Path(__file__).resolve().parent.parent / "observability" / "opik" / "__init__.py"
+)
 
 
 def _load_plugin_module():

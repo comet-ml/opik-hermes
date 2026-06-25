@@ -32,12 +32,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install ruff
-        run: pip install ruff
+        run: pip install ruff==0.15.5
       - name: Lint
         run: ruff check observability tests
-      # NOTE: `ruff format --check` is intentionally NOT enforced yet — the
-      # plugin was ported from the upstream Langfuse plugin's formatting. A
-      # one-time `ruff format` reformat is deferred to the refactor PR.
+      - name: Format check
+        run: ruff format --check observability tests
 
   build:
     name: build (package + entry point)
