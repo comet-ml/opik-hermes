@@ -43,6 +43,21 @@ HOOK_CALLS = [
             tool_call_id="tc1",
         ),
     ),
+    (
+        "on_api_request_error",
+        dict(
+            task_id="t",
+            session_id="s",
+            api_call_count=1,
+            error={"type": "Timeout", "message": "boom"},
+        ),
+    ),
+    (
+        "on_subagent_stop",
+        dict(parent_session_id="s", child_role="researcher", child_status="completed"),
+    ),
+    ("on_session_end", dict(session_id="s")),
+    ("on_session_event", dict(session_id="s")),
 ]
 
 
@@ -53,7 +68,7 @@ def test_hooks_noop_when_sdk_missing(plugin_no_sdk, hook_name, kwargs):
     assert plugin_no_sdk._get_opik() is None
 
 
-def test_register_wires_all_six_hooks(plugin_no_sdk):
+def test_register_wires_expected_hooks(plugin_no_sdk):
     registered = []
 
     class Ctx:
@@ -62,13 +77,25 @@ def test_register_wires_all_six_hooks(plugin_no_sdk):
 
     plugin_no_sdk.register(Ctx())
     assert set(registered) == {
+        # LLM (per-API-call + per-turn)
         "pre_api_request",
         "post_api_request",
         "pre_llm_call",
         "post_llm_call",
+        # tools
         "pre_tool_call",
         "post_tool_call",
+        # failure + agentic structure
+        "api_request_error",
+        "subagent_stop",
+        # session lifecycle
+        "on_session_start",
+        "on_session_end",
+        "on_session_finalize",
+        "on_session_reset",
     }
+    # We must NOT register mutation hooks (transform_*) — passive observer only.
+    assert not any(h.startswith("transform_") for h in registered)
 
 
 def test_post_tool_call_without_prior_state_is_noop(plugin):
