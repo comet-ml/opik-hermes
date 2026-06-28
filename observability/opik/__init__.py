@@ -47,7 +47,9 @@ from .sanitize import (  # noqa: F401
     _as_input_dict,
     _build_read_file_preview,
     _coerce_request_messages,
+    _content_to_text,
     _extract_last_user_message,
+    _trace_name_from_messages,
     _is_base64_data_uri,
     _looks_like_read_file_payload,
     _maybe_parse_json_string,
@@ -161,7 +163,7 @@ def _start_root_trace(
         "api_mode": api_mode,
     }
     trace = client.trace(
-        name="Hermes turn",
+        name=_trace_name_from_messages(messages) or "Hermes turn",
         project_name=_project_name(),
         thread_id=session_id or None,
         input=trace_input,

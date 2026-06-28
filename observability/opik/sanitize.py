@@ -239,6 +239,50 @@ def _extract_last_user_message(messages: Any) -> Any:
     return None
 
 
+_TRACE_NAME_MAX_CHARS = 60
+
+
+def _content_to_text(content: Any) -> str:
+    """Flatten a message ``content`` (str, or list of content parts) to text.
+
+    OpenAI-style content can be a plain string or a list of parts like
+    ``[{"type": "text", "text": "..."}]``. Returns "" when no text is present.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+        return " ".join(parts)
+    return ""
+
+
+def _trace_name_from_messages(messages: Any) -> Optional[str]:
+    """Derive a scannable trace name from the latest user message.
+
+    Follows the Opik convention of naming a trace after the unit of work it
+    represents rather than a constant. For an agent turn the most identifying
+    signal is what the user asked, so we use a whitespace-collapsed, truncated
+    preview of the last user message. Returns ``None`` when there is no usable
+    user text, so the caller can fall back to a stable default.
+    """
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            text = " ".join(_content_to_text(message.get("content")).split())
+            if not text:
+                return None
+            if len(text) <= _TRACE_NAME_MAX_CHARS:
+                return text
+            return text[:_TRACE_NAME_MAX_CHARS].rstrip() + "…"
+    return None
+
+
 def _coerce_request_messages(
     *,
     request_messages: Any = None,

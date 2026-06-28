@@ -64,6 +64,22 @@ def test_tool_span_captures_output(plugin):
     assert any("output" in u for u in tool_spans[0].updates)
 
 
+def test_every_span_has_name_and_type(plugin):
+    # name/type are creation-only in Opik (span.update can't set them), so a
+    # span must never be created without them — else it renders as "NA" in the
+    # UI. Guards our creation paths (LLM + tool) against that regression.
+    _run_turn_with_tool(plugin)
+    for span in plugin._fake.traces[0].spans:
+        assert span.name, f"span created without a name: {span!r}"
+        assert span.type in {"llm", "tool"}, f"unexpected span type: {span.type!r}"
+
+
+def test_tool_span_named_after_tool(plugin):
+    _run_turn_with_tool(plugin)
+    tool_spans = [s for s in plugin._fake.traces[0].spans if s.type == "tool"]
+    assert tool_spans[0].name == "Tool: terminal"
+
+
 # --- Regression: the bug fixed in #2 ----------------------------------------
 # Before the fix, the root trace was only ended under a content heuristic the
 # per-turn post_llm_call never satisfied, so traces were created but never
