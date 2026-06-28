@@ -39,16 +39,17 @@ def _load_plugin_module():
 class FakeSpan:
     """Records update/end calls; supports nested .span() for tool-on-llm cases."""
 
-    def __init__(self, events: list, name: str, type: str):
+    def __init__(self, events: list, name: str, type: str, create_kwargs: dict = None):
         self._events = events
         self.name = name
         self.type = type
+        self.create_kwargs = create_kwargs or {}
         self.ended = False
         self.updates: list[dict] = []
 
     def span(self, **kwargs: Any) -> "FakeSpan":
         self._events.append(("span.span", kwargs.get("type"), kwargs.get("name")))
-        return FakeSpan(self._events, kwargs.get("name"), kwargs.get("type"))
+        return FakeSpan(self._events, kwargs.get("name"), kwargs.get("type"), kwargs)
 
     def update(self, **kwargs: Any) -> None:
         self.updates.append(kwargs)
@@ -70,7 +71,7 @@ class FakeTrace:
 
     def span(self, **kwargs: Any) -> FakeSpan:
         self._events.append(("trace.span", kwargs.get("type"), kwargs.get("name")))
-        s = FakeSpan(self._events, kwargs.get("name"), kwargs.get("type"))
+        s = FakeSpan(self._events, kwargs.get("name"), kwargs.get("type"), kwargs)
         self.spans.append(s)
         return s
 
