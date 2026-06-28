@@ -97,9 +97,28 @@ class PendingTool:
 
 
 @dataclass
+class PendingGeneration:
+    """An LLM API call seen at pre_api_request, awaiting its response.
+
+    Same batching-race reasoning as PendingTool: a fast API call fires
+    post_api_request within the SDK batch window, so a generation span created
+    at pre and ended at post loses its create message and lands as an "NA" span
+    (no name/type/start_time). We hold the creation fields here and build the
+    span once, fully formed, at post-time.
+    """
+
+    start_time: datetime.datetime
+    api_call_count: int
+    input: Any
+    metadata: Dict[str, Any]
+    model: str
+    provider: str
+
+
+@dataclass
 class TraceState:
     trace: Any
-    generations: Dict[str, Any] = field(default_factory=dict)
+    generations: Dict[str, PendingGeneration] = field(default_factory=dict)
     tools: Dict[str, PendingTool] = field(default_factory=dict)
     pending_tools_by_name: Dict[str, list] = field(default_factory=dict)
     turn_tool_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -199,44 +218,6 @@ def _start_root_trace(
     return TraceState(trace=trace)
 
 
-def _end_observation(
-    observation: Any,
-    *,
-    output: Any = None,
-    metadata: Optional[dict] = None,
-    usage: Optional[dict] = None,
-    total_cost: Optional[float] = None,
-    model: Optional[str] = None,
-    provider: Optional[str] = None,
-    error_info: Optional[dict] = None,
-) -> None:
-    if observation is None:
-        return
-    try:
-        update_kwargs: Dict[str, Any] = {}
-        if output is not None:
-            update_kwargs["output"] = (
-                output if isinstance(output, dict) else {"output": output}
-            )
-        if metadata:
-            update_kwargs["metadata"] = metadata
-        if usage:
-            update_kwargs["usage"] = usage
-        if total_cost is not None:
-            update_kwargs["total_cost"] = total_cost
-        if model:
-            update_kwargs["model"] = model
-        if provider:
-            update_kwargs["provider"] = provider
-        if error_info:
-            update_kwargs["error_info"] = error_info
-        if update_kwargs:
-            observation.update(**update_kwargs)
-        observation.end()
-    except Exception as exc:  # pragma: no cover - fail-open
-        _debug(f"end observation failed: {exc}")
-
-
 def _merge_trace_output(output: Any, state: TraceState) -> Any:
     if not state.turn_tool_calls:
         return output
@@ -277,13 +258,10 @@ def _finish_trace(task_key: str, *, output: Any = None) -> None:
         return
 
     try:
-        for observation in state.generations.values():
-            _end_observation(observation)
-        for observation in state.tools.values():
-            _end_observation(observation)
-        for queue in state.pending_tools_by_name.values():
-            for observation in queue:
-                _end_observation(observation)
+        # Leftover generations/tools are PendingGeneration/PendingTool records
+        # for calls that never received a post (interrupted turn). They have no
+        # span yet — an in-flight call with no response isn't a meaningful span,
+        # so we simply drop them rather than emit a partial span.
         final_output = _merge_trace_output(output, state)
         if final_output is not None:
             state.trace.update(
@@ -416,16 +394,16 @@ def on_pre_llm_request(
             _evict_stale_locked()
             _TRACE_STATE[task_key] = state
         state.last_updated_at = time.time()
-        previous = state.generations.pop(req_key, None)
-        if previous is not None:
-            _end_observation(previous)
-        state.generations[req_key] = state.trace.span(
-            name=f"LLM call {api_call_count}",
-            type="llm",
+        # Record the call; the span is created (fully formed) at post-time to
+        # avoid the create/end batching race for fast API calls. A duplicate
+        # req_key just overwrites the pending record (no span to end yet).
+        state.generations[req_key] = PendingGeneration(
+            start_time=datetime.datetime.now(datetime.timezone.utc),
+            api_call_count=api_call_count,
             input={"messages": _serialize_messages(input_messages)},
             metadata={"platform": platform, "api_mode": api_mode, "base_url": base_url},
             model=model,
-            provider=provider or None,
+            provider=provider or "",
         )
 
 
@@ -461,17 +439,18 @@ def on_post_llm_call(
 
     with _STATE_LOCK:
         state = _TRACE_STATE.get(task_key)
-        generation = state.generations.pop(req_key, None) if state else None
+        pending = state.generations.pop(req_key, None) if state else None
 
     # Two callers share this handler:
-    #   - post_api_request: per-API-call. Carries a generation span we opened in
-    #     on_pre_llm_request (matched by req_key); we close that span here.
+    #   - post_api_request: per-API-call. Matches the PendingGeneration we
+    #     recorded in on_pre_llm_request (by req_key); we create+end its span
+    #     here, in one message, to avoid the batching race.
     #   - post_llm_call: per-TURN, fired once after the tool loop completes
     #     (agent/turn_finalizer.py). It carries `assistant_response` but no
-    #     api_call_count, so it never matches a generation. This is the only
-    #     reliable end-of-turn signal — finalize the root trace here, otherwise
-    #     the trace is never .end()-ed and never surfaces as completed in Opik.
-    if generation is None:
+    #     api_call_count, so it never matches a PendingGeneration. This is the
+    #     only reliable end-of-turn signal — finalize the root trace here,
+    #     otherwise the trace never .end()s and never surfaces as completed.
+    if pending is None:
         if state is not None and assistant_response is not None:
             _finish_trace(task_key, output={"content": _safe_value(assistant_response)})
         return
@@ -529,23 +508,36 @@ def on_post_llm_call(
         )
 
     tool_count = len(output.get("tool_calls", [])) or assistant_tool_call_count
-    gen_metadata: Dict[str, Any] = {"tool_call_count": tool_count}
+    gen_metadata: Dict[str, Any] = dict(pending.metadata)
+    gen_metadata["tool_call_count"] = tool_count
     if api_duration and api_duration > 0:
         gen_metadata["api_duration_s"] = round(api_duration, 3)
     if finish_reason:
         gen_metadata["finish_reason"] = finish_reason
-    _end_observation(
-        generation,
-        output=output,
-        usage=usage_details or None,
-        total_cost=total_cost,
-        model=model or None,
-        provider=provider or None,
-        metadata=gen_metadata,
-    )
+
+    # Create the generation span fully formed in a single message (start_time
+    # from the recorded pre, end_time now) so a fast API call can't lose its
+    # create to the batching race (the NA-span bug, same as tool spans).
+    with _STATE_LOCK:
+        state = _TRACE_STATE.get(task_key)
+        if state is None:
+            return
+        state.trace.span(
+            name=f"LLM call {pending.api_call_count}",
+            type="llm",
+            input=pending.input,
+            output=output,
+            usage=usage_details or None,
+            total_cost=total_cost,
+            model=model or pending.model or None,
+            provider=provider or pending.provider or None,
+            metadata=gen_metadata,
+            start_time=pending.start_time,
+            end_time=datetime.datetime.now(datetime.timezone.utc),
+        )
 
     # NOTE: the root trace is finalized by the per-turn post_llm_call signal
-    # (see the generation-is-None branch above), NOT here. Finalizing on a
+    # (see the pending-is-None branch above), NOT here. Finalizing on a
     # per-API-call content heuristic would close the trace mid-turn — before
     # later tool calls / API calls in the same turn are recorded.
 
@@ -681,12 +673,13 @@ def on_api_request_error(
     error: Any = None,
     **_: Any,
 ) -> None:
-    """Record a failed API request on its open generation span.
+    """Record a failed API request as the generation span for that call.
 
-    Without this, a failed LLM call leaves the generation span we opened in
-    on_pre_llm_request dangling with no outcome. Here we attach error_info +
-    the failure metadata and close the span. The trace itself is left open —
-    Hermes retries/falls back, and the turn still finalizes via post_llm_call.
+    Without this, a failed LLM call would leave its PendingGeneration unconsumed
+    and never produce a span. We create the generation span here (one message,
+    start from the recorded pre + end now) carrying error_info and the failure
+    metadata. The trace itself is left open — Hermes retries/falls back, and the
+    turn still finalizes via post_llm_call.
     """
     client = _get_opik()
     if client is None:
@@ -703,34 +696,40 @@ def on_api_request_error(
 
     with _STATE_LOCK:
         state = _TRACE_STATE.get(task_key)
-        generation = state.generations.pop(req_key, None) if state else None
-        if state is not None:
-            state.last_updated_at = time.time()
+        pending = state.generations.pop(req_key, None) if state else None
+        if state is None or pending is None:
+            return
+        state.last_updated_at = time.time()
 
-    if generation is None:
-        return
+        error_meta: Dict[str, Any] = dict(pending.metadata)
+        for k, v in {
+            "status_code": status_code,
+            "retry_count": retry_count,
+            "max_retries": max_retries,
+            "retryable": retryable,
+            "reason": reason,
+        }.items():
+            if v is not None:
+                error_meta[k] = v
+        if api_duration and api_duration > 0:
+            error_meta["api_duration_s"] = round(api_duration, 3)
 
-    error_meta: Dict[str, Any] = {
-        "status_code": status_code,
-        "retry_count": retry_count,
-        "max_retries": max_retries,
-        "retryable": retryable,
-        "reason": reason,
-    }
-    if api_duration and api_duration > 0:
-        error_meta["api_duration_s"] = round(api_duration, 3)
-    _end_observation(
-        generation,
-        output={"error": message},
-        model=model or None,
-        provider=provider or None,
-        error_info={
-            "exception_type": exc_type,
-            "message": message,
-            "traceback": message,
-        },
-        metadata={k: v for k, v in error_meta.items() if v is not None},
-    )
+        state.trace.span(
+            name=f"LLM call {pending.api_call_count}",
+            type="llm",
+            input=pending.input,
+            output={"error": message},
+            model=model or pending.model or None,
+            provider=provider or pending.provider or None,
+            error_info={
+                "exception_type": exc_type,
+                "message": message,
+                "traceback": message,
+            },
+            metadata=error_meta,
+            start_time=pending.start_time,
+            end_time=datetime.datetime.now(datetime.timezone.utc),
+        )
 
 
 def on_subagent_stop(

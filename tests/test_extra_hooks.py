@@ -29,11 +29,14 @@ def test_api_error_sets_error_info_and_ends_generation(plugin):
         error={"type": "ServerError", "message": "upstream 500"},
         **kw,
     )
+    # The errored call becomes a fully-formed LLM span (one message) carrying
+    # error_info — not a created-then-updated span.
     llm = [s for s in plugin._fake.traces[0].spans if s.type == "llm"][0]
-    assert llm.ended
-    update = llm.updates[-1]
-    assert update.get("error_info", {}).get("message") == "upstream 500"
-    assert update["error_info"]["exception_type"] == "ServerError"
+    ck = llm.create_kwargs
+    assert ck["error_info"]["message"] == "upstream 500"
+    assert ck["error_info"]["exception_type"] == "ServerError"
+    assert ck.get("start_time") is not None and ck.get("end_time") is not None
+    assert ck["output"] == {"error": "upstream 500"}
 
 
 def test_api_error_without_open_generation_is_noop(plugin):

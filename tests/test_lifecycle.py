@@ -51,9 +51,29 @@ def test_llm_span_carries_model_and_usage(plugin):
     _run_turn_with_tool(plugin)
     llm_spans = [s for s in plugin._fake.traces[0].spans if s.type == "llm"]
     assert llm_spans, "expected at least one llm span"
-    last_update = llm_spans[0].updates[-1]
-    assert last_update.get("model") == "gpt-5"
-    assert last_update.get("usage") is not None
+    # LLM spans are now created fully-formed in one call (start+end together),
+    # not created-then-updated — so model/usage are in the create kwargs.
+    ck = llm_spans[0].create_kwargs
+    assert ck.get("model") == "gpt-5"
+    assert ck.get("usage") is not None
+    assert ck.get("start_time") is not None and ck.get("end_time") is not None
+    assert llm_spans[0].updates == []  # no post-creation mutation
+
+
+def test_llm_span_is_single_message_not_create_then_end(plugin):
+    # Regression: a fast API call (pre+post within one SDK batch window) used to
+    # lose the generation span's create message, leaving an "NA" llm span
+    # (name=None/type=None/epoch start). The span must now be born complete in
+    # one trace.span() call.
+    _run_turn_with_tool(plugin)
+    llm = [s for s in plugin._fake.traces[0].spans if s.type == "llm"]
+    assert llm
+    for span in llm:
+        assert span.name and span.name.startswith("LLM call")
+        assert span.create_kwargs.get("start_time") is not None
+        assert span.create_kwargs.get("end_time") is not None
+        assert span.updates == []
+        assert not span.ended
 
 
 def test_tool_span_captures_output(plugin):
