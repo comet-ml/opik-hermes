@@ -1,0 +1,120 @@
+"""api_request_error, subagent_stop, and session-lifecycle hook behavior."""
+
+from __future__ import annotations
+
+
+def _open_generation(plugin, **kw):
+    plugin.on_pre_llm_request(
+        api_call_count=1,
+        messages=[{"role": "user", "content": "hi"}],
+        model="gpt-5",
+        provider="openai-api",
+        **kw,
+    )
+
+
+# --- api_request_error ------------------------------------------------------
+
+
+def test_api_error_sets_error_info_and_ends_generation(plugin):
+    kw = dict(task_id="t", session_id="s", turn_id="T1")
+    _open_generation(plugin, **kw)
+    plugin.on_api_request_error(
+        api_call_count=1,
+        model="gpt-5",
+        provider="openai-api",
+        status_code=500,
+        retryable=True,
+        reason="server_error",
+        error={"type": "ServerError", "message": "upstream 500"},
+        **kw,
+    )
+    llm = [s for s in plugin._fake.traces[0].spans if s.type == "llm"][0]
+    assert llm.ended
+    update = llm.updates[-1]
+    assert update.get("error_info", {}).get("message") == "upstream 500"
+    assert update["error_info"]["exception_type"] == "ServerError"
+
+
+def test_api_error_without_open_generation_is_noop(plugin):
+    # error arriving with no matching generation must not raise or create spans
+    plugin.on_api_request_error(
+        task_id="t",
+        session_id="s",
+        turn_id="T1",
+        api_call_count=9,
+        error={"type": "X", "message": "y"},
+    )
+    assert plugin._fake.traces == []
+
+
+# --- subagent_stop ----------------------------------------------------------
+
+
+def test_subagent_stop_adds_span_under_parent_trace(plugin):
+    kw = dict(task_id="t", session_id="s", turn_id="T1")
+    _open_generation(plugin, **kw)
+    plugin.on_subagent_stop(
+        parent_session_id="s",
+        child_role="researcher",
+        child_summary="found 3 sources",
+        child_status="completed",
+        duration_ms=1500,
+        **kw,
+    )
+    spans = plugin._fake.traces[0].spans
+    sub = [s for s in spans if s.create_kwargs.get("metadata", {}).get("subagent")]
+    assert sub, "expected a subagent span"
+    ck = sub[0].create_kwargs
+    assert ck["name"] == "Subagent: researcher"
+    assert ck["output"]["summary"] == "found 3 sources"
+    assert ck.get("start_time") is not None and ck.get("end_time") is not None
+
+
+def test_subagent_stop_resolves_parent_by_session_when_no_turn_key(plugin):
+    # Subagent stop often carries only parent_session_id; resolve to that
+    # session's active trace.
+    plugin.on_pre_llm_request(
+        api_call_count=1,
+        messages=[{"role": "user", "content": "hi"}],
+        model="gpt-5",
+        task_id="",
+        session_id="sess-9",
+        turn_id="T9",
+    )
+    plugin.on_subagent_stop(
+        parent_session_id="sess-9", child_role="coder", child_status="completed"
+    )
+    spans = plugin._fake.traces[0].spans
+    assert any(s.create_kwargs.get("metadata", {}).get("subagent") for s in spans)
+
+
+def test_subagent_stop_no_parent_trace_is_noop(plugin):
+    plugin.on_subagent_stop(parent_session_id="unknown", child_role="x")
+    assert plugin._fake.traces == []
+
+
+# --- session lifecycle ------------------------------------------------------
+
+
+def test_session_end_finalizes_open_traces_and_flushes(plugin):
+    plugin.on_pre_llm_request(
+        api_call_count=1,
+        messages=[{"role": "user", "content": "hi"}],
+        model="gpt-5",
+        session_id="sX",
+        turn_id="T1",
+    )
+    assert not plugin._fake.traces[0].ended
+    plugin.on_session_end(session_id="sX")
+    assert plugin._fake.traces[0].ended
+    assert plugin._fake.flushed >= 1
+
+
+def test_session_end_without_session_id_is_noop(plugin):
+    plugin.on_session_end(session_id="")  # must not raise
+
+
+def test_session_event_is_noop_observer(plugin):
+    plugin.on_session_event(session_id="s")  # breadcrumb only; no traces
+    assert plugin._fake.traces == []

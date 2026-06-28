@@ -42,7 +42,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from .config import _debug, _env, _env_bool, _project_name, _tags, logger  # noqa: F401
+from .config import (  # noqa: F401
+    _debug,
+    _debug_enabled,
+    _env,
+    _env_bool,
+    _project_name,
+    _tags,
+    logger,
+)
 from .keys import _request_key, _scope_prefix, _trace_key  # noqa: F401
 from .sanitize import (  # noqa: F401
     _as_input_dict,
@@ -655,13 +663,198 @@ def on_post_tool_call(
         )
 
 
+def on_api_request_error(
+    *,
+    task_id: str = "",
+    session_id: str = "",
+    turn_id: str = "",
+    api_request_id: str = "",
+    api_call_count: int = 0,
+    model: str = "",
+    provider: str = "",
+    api_duration: float = 0.0,
+    status_code: Any = None,
+    retry_count: Any = None,
+    max_retries: Any = None,
+    retryable: Any = None,
+    reason: str = "",
+    error: Any = None,
+    **_: Any,
+) -> None:
+    """Record a failed API request on its open generation span.
+
+    Without this, a failed LLM call leaves the generation span we opened in
+    on_pre_llm_request dangling with no outcome. Here we attach error_info +
+    the failure metadata and close the span. The trace itself is left open —
+    Hermes retries/falls back, and the turn still finalizes via post_llm_call.
+    """
+    client = _get_opik()
+    if client is None:
+        return
+
+    err = error if isinstance(error, dict) else {}
+    message = str(err.get("message") or reason or "API request error")
+    exc_type = str(err.get("type") or "APIRequestError")
+
+    task_key = _trace_key(
+        task_id, session_id, turn_id=turn_id, api_request_id=api_request_id
+    )
+    req_key = _request_key(api_call_count)
+
+    with _STATE_LOCK:
+        state = _TRACE_STATE.get(task_key)
+        generation = state.generations.pop(req_key, None) if state else None
+        if state is not None:
+            state.last_updated_at = time.time()
+
+    if generation is None:
+        return
+
+    error_meta: Dict[str, Any] = {
+        "status_code": status_code,
+        "retry_count": retry_count,
+        "max_retries": max_retries,
+        "retryable": retryable,
+        "reason": reason,
+    }
+    if api_duration and api_duration > 0:
+        error_meta["api_duration_s"] = round(api_duration, 3)
+    _end_observation(
+        generation,
+        output={"error": message},
+        model=model or None,
+        provider=provider or None,
+        error_info={
+            "exception_type": exc_type,
+            "message": message,
+            "traceback": message,
+        },
+        metadata={k: v for k, v in error_meta.items() if v is not None},
+    )
+
+
+def on_subagent_stop(
+    *,
+    parent_session_id: str = "",
+    child_role: Any = None,
+    child_summary: Any = None,
+    child_status: str = "",
+    duration_ms: Any = None,
+    task_id: str = "",
+    session_id: str = "",
+    turn_id: str = "",
+    api_request_id: str = "",
+    **_: Any,
+) -> None:
+    """Record a finished subagent as a span under the parent's trace.
+
+    Hermes spawns isolated subagents for parallel work; without this they are
+    invisible in Opik. The subagent's own LLM/tool calls run in a separate
+    process/session, so all we get here is a summary at completion — logged as
+    one span on whichever active trace belongs to the parent session.
+    """
+    client = _get_opik()
+    if client is None:
+        return
+
+    # Find the parent's active trace: prefer an explicit turn/session key,
+    # else fall back to the parent_session_id's most recent trace.
+    parent = parent_session_id or session_id
+    with _STATE_LOCK:
+        state = None
+        if task_id or turn_id or api_request_id or session_id:
+            state = _TRACE_STATE.get(
+                _trace_key(
+                    task_id, session_id, turn_id=turn_id, api_request_id=api_request_id
+                )
+            )
+        if state is None and parent:
+            candidates = [
+                s
+                for k, s in _TRACE_STATE.items()
+                if k.startswith(f"session:{parent}") or k == parent
+            ]
+            state = (
+                max(candidates, key=lambda s: s.last_updated_at) if candidates else None
+            )
+        if state is None:
+            return
+        now = datetime.datetime.now(datetime.timezone.utc)
+        start_time = now
+        if isinstance(duration_ms, (int, float)) and duration_ms > 0:
+            start_time = now - datetime.timedelta(milliseconds=float(duration_ms))
+        state.trace.span(
+            name=f"Subagent: {child_role or 'subagent'}",
+            type="general",
+            input={"role": _safe_value(child_role)} if child_role else {},
+            output={"summary": _safe_value(child_summary)} if child_summary else None,
+            start_time=start_time,
+            end_time=now,
+            metadata={
+                "subagent": True,
+                "child_role": child_role,
+                "child_status": child_status,
+                "duration_ms": duration_ms,
+                "parent_session_id": parent,
+            },
+        )
+        state.last_updated_at = time.time()
+
+
+def on_session_end(
+    *, session_id: str = "", task_id: str = "", turn_id: str = "", **_: Any
+) -> None:
+    """Flush at an explicit session boundary so nothing is left buffered.
+
+    Turns finalize on post_llm_call, but a session ending (CLI exit, /reset,
+    gateway drain) is the last chance to push any still-open trace. We finalize
+    any trace still tracked for this session and flush.
+    """
+    client = _get_opik()
+    if client is None:
+        return
+    _debug(f"session end: {session_id or task_id}")
+    if not session_id:
+        return
+    with _STATE_LOCK:
+        keys = [k for k in _TRACE_STATE if k.startswith(f"session:{session_id}")]
+    for key in keys:
+        _finish_trace(key)
+    try:
+        client.flush()
+    except Exception:
+        pass
+
+
+def on_session_event(*, session_id: str = "", **_: Any) -> None:
+    """Lightweight breadcrumb for session start / finalize / reset.
+
+    Observer-only: these mark conversation boundaries. We just log them under
+    debug so the lifecycle is visible without creating spurious traces.
+    """
+    if _debug_enabled():
+        _debug(f"session event for {session_id}")
+
+
 def register(ctx) -> None:
-    # Register for both hook-name variants so the plugin works across Hermes
-    # versions. pre_api_request / post_api_request fire per API call
-    # (preferred); pre_llm_call / post_llm_call fire once per turn.
+    # Per-API-call (preferred) and per-turn LLM hooks. pre_api_request /
+    # post_api_request fire per API call; pre_llm_call / post_llm_call once
+    # per turn (post_llm_call is the reliable end-of-turn finalize signal).
     ctx.register_hook("pre_api_request", on_pre_llm_request)
     ctx.register_hook("post_api_request", on_post_llm_call)
     ctx.register_hook("pre_llm_call", on_pre_llm_call)
     ctx.register_hook("post_llm_call", on_post_llm_call)
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
     ctx.register_hook("post_tool_call", on_post_tool_call)
+    # Failure + agentic-structure coverage.
+    ctx.register_hook("api_request_error", on_api_request_error)
+    ctx.register_hook("subagent_stop", on_subagent_stop)
+    # Session lifecycle: flush on end; breadcrumbs for start/finalize/reset.
+    ctx.register_hook("on_session_end", on_session_end)
+    ctx.register_hook("on_session_start", on_session_event)
+    ctx.register_hook("on_session_finalize", on_session_end)
+    ctx.register_hook("on_session_reset", on_session_event)
+    # NOTE: transform_* hooks are intentionally NOT registered — they mutate
+    # agent output (return a value that replaces the response / tool result),
+    # which a passive observability plugin must never do. Approval, kanban, and
+    # gateway-dispatch hooks are likewise out of scope for tracing.
