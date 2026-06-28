@@ -36,6 +36,7 @@ Module layout:
 
 from __future__ import annotations
 
+import datetime
 import threading
 import time
 from dataclasses import dataclass, field
@@ -72,10 +73,26 @@ except Exception:  # pragma: no cover - fail-open when optional dep is missing
 
 
 @dataclass
+class PendingTool:
+    """A tool call seen at pre_tool_call, awaiting its result.
+
+    We do NOT create the Opik span at pre-time. Fast tools (e.g. execute_code
+    returning in milliseconds) fire post_tool_call within the SDK's batch
+    window, so a span created at pre and ended at post loses its create message
+    to the batching race — the span lands with no name/type/start_time ("NA").
+    Instead we hold the start_time + input here and create the span once, fully
+    formed (start + end together), at post-time.
+    """
+
+    start_time: datetime.datetime
+    input: Any
+
+
+@dataclass
 class TraceState:
     trace: Any
     generations: Dict[str, Any] = field(default_factory=dict)
-    tools: Dict[str, Any] = field(default_factory=dict)
+    tools: Dict[str, PendingTool] = field(default_factory=dict)
     pending_tools_by_name: Dict[str, list] = field(default_factory=dict)
     turn_tool_calls: list[dict[str, Any]] = field(default_factory=list)
     last_updated_at: float = field(default_factory=time.time)
@@ -544,20 +561,20 @@ def on_pre_tool_call(
         task_id, session_id, turn_id=turn_id, api_request_id=api_request_id
     )
 
+    pending = PendingTool(
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+        input=_as_input_dict(_safe_value(args)),
+    )
     with _STATE_LOCK:
         state = _TRACE_STATE.get(task_key)
         if state is None:
             return
-        observation = state.trace.span(
-            name=f"Tool: {tool_name}",
-            type="tool",
-            input=_as_input_dict(_safe_value(args)),
-            metadata={"tool_name": tool_name, "tool_call_id": tool_call_id},
-        )
+        # Record the start; the span is created (fully formed) at post-time to
+        # avoid the create/end batching race for fast tools. See PendingTool.
         if tool_call_id:
-            state.tools[tool_call_id] = observation
+            state.tools[tool_call_id] = pending
         else:
-            state.pending_tools_by_name.setdefault(tool_name, []).append(observation)
+            state.pending_tools_by_name.setdefault(tool_name, []).append(pending)
 
 
 def on_post_tool_call(
@@ -575,23 +592,20 @@ def on_post_tool_call(
     task_key = _trace_key(
         task_id, session_id, turn_id=turn_id, api_request_id=api_request_id
     )
-    observation = None
+    pending = None
 
     with _STATE_LOCK:
         state = _TRACE_STATE.get(task_key)
         if state is None:
             return
         if tool_call_id:
-            observation = state.tools.pop(tool_call_id, None)
-        if observation is None:
+            pending = state.tools.pop(tool_call_id, None)
+        if pending is None:
             queue = state.pending_tools_by_name.get(tool_name)
             if queue:
-                observation = queue.pop(0)
+                pending = queue.pop(0)
                 if not queue:
                     state.pending_tools_by_name.pop(tool_name, None)
-
-    if observation is None:
-        return
 
     if isinstance(result, str):
         result_value = _maybe_parse_json_string(result)
@@ -613,14 +627,32 @@ def on_post_tool_call(
                             function_payload["output"] = safe_result_value
                         break
 
-    _end_observation(
-        observation,
-        output=safe_result_value,
-        metadata={
-            "tool_name": tool_name,
-            "args": _safe_value(args, parse_json_strings=True),
-        },
+    # Create the span fully formed in a single message — start_time from the
+    # recorded pre, end_time now — so the create/end batching race can't strip
+    # its name/type/start_time. If pre was missed, fall back to now() for start.
+    span_input = pending.input if pending else _as_input_dict(_safe_value(args))
+    start_time = (
+        pending.start_time if pending else datetime.datetime.now(datetime.timezone.utc)
     )
+    with _STATE_LOCK:
+        state = _TRACE_STATE.get(task_key)
+        if state is None:
+            return
+        state.trace.span(
+            name=f"Tool: {tool_name}",
+            type="tool",
+            input=span_input,
+            output=safe_result_value
+            if isinstance(safe_result_value, dict)
+            else {"output": safe_result_value},
+            start_time=start_time,
+            end_time=datetime.datetime.now(datetime.timezone.utc),
+            metadata={
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "args": _safe_value(args, parse_json_strings=True),
+            },
+        )
 
 
 def register(ctx) -> None:

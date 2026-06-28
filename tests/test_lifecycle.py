@@ -60,8 +60,30 @@ def test_tool_span_captures_output(plugin):
     _run_turn_with_tool(plugin)
     tool_spans = [s for s in plugin._fake.traces[0].spans if s.type == "tool"]
     assert tool_spans
-    assert tool_spans[0].ended
-    assert any("output" in u for u in tool_spans[0].updates)
+    # The tool span is created fully-formed in one call (output + start/end
+    # together), not created-then-ended — so the create/end batching race
+    # can't strip its fields. See the NA-span fix.
+    ck = tool_spans[0].create_kwargs
+    assert "output" in ck and ck["output"]
+    assert ck.get("start_time") is not None
+    assert ck.get("end_time") is not None
+
+
+def test_tool_span_is_single_message_not_create_then_end(plugin):
+    # Regression: fast tools (pre+post within one SDK batch window) used to lose
+    # the create message, leaving an "NA" span (name=None/type=None/epoch start).
+    # The span must now be born complete in one trace.span() call — no separate
+    # update()/end() on it afterwards.
+    _run_turn_with_tool(plugin)
+    tool_spans = [s for s in plugin._fake.traces[0].spans if s.type == "tool"]
+    span = tool_spans[0]
+    assert span.name == "Tool: terminal"
+    assert span.type == "tool"
+    assert span.create_kwargs.get("start_time") is not None
+    assert span.create_kwargs.get("end_time") is not None
+    # No post-creation mutation: the span carried everything at birth.
+    assert span.updates == []
+    assert not span.ended
 
 
 def test_every_span_has_name_and_type(plugin):
