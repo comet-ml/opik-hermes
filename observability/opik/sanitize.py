@@ -298,30 +298,105 @@ def _coerce_request_messages(
     return [{"role": "user", "content": user_message}]
 
 
+def _responses_parts_to_text(content: Any) -> Any:
+    """Flatten Responses-API content parts to text.
+
+    In codex_responses mode a message's ``content`` is a list of typed parts
+    like ``{"type": "input_text"|"output_text", "text": "..."}`` or
+    ``{"type": "input_image"|"output_image", ...}``. Join the text parts and
+    note any images, so the span input is readable instead of a raw blob.
+    """
+    if not isinstance(content, list):
+        return _safe_value(content)
+    texts, images = [], 0
+    for part in content:
+        if isinstance(part, dict):
+            ptype = part.get("type", "")
+            if "image" in ptype:
+                images += 1
+            elif isinstance(part.get("text"), str):
+                texts.append(part["text"])
+        elif isinstance(part, str):
+            texts.append(part)
+    text = _safe_value(" ".join(texts)) if texts else None
+    if images and text is not None:
+        return {"text": text, "images": images}
+    if images:
+        return {"images": images}
+    return text
+
+
+def _serialize_one_message(message: Any) -> Optional[dict[str, Any]]:
+    """Normalize a single message item (Chat-Completions OR Responses API).
+
+    Hermes passes Chat-Completions ``{role, content}`` dicts in
+    chat_completions mode, but Responses-API items in codex_responses mode:
+    ``{type: "message"|"function_call"|"function_call_output"|"reasoning", ...}``
+    — most of which have no top-level role/content. Map each to a readable
+    ``{role, content}`` shape so the span input isn't a wall of nulls.
+    """
+    if not isinstance(message, dict):
+        return None
+
+    item_type = message.get("type")
+
+    # Responses-API typed items (codex_responses mode).
+    if item_type == "function_call":
+        return {
+            "role": "assistant",
+            "content": {
+                "tool_call": message.get("name"),
+                "arguments": _safe_value(
+                    message.get("arguments"), parse_json_strings=True
+                ),
+                "call_id": message.get("call_id"),
+            },
+        }
+    if item_type == "function_call_output":
+        return {
+            "role": "tool",
+            "call_id": message.get("call_id"),
+            "content": _safe_value(message.get("output"), parse_json_strings=True),
+        }
+    if item_type == "reasoning":
+        return {"role": "assistant", "content": "[reasoning]"}
+    if item_type == "message":
+        return {
+            "role": message.get("role"),
+            "content": _responses_parts_to_text(message.get("content")),
+        }
+
+    # Chat-Completions ``{role, content}`` (chat_completions mode).
+    role = message.get("role")
+    if role is None and "content" not in message:
+        # Unknown item shape — keep its type so it isn't a silent null.
+        return {"role": None, "content": {"unrecognized_item": _safe_value(message)}}
+    item: dict[str, Any] = {
+        "role": role,
+        "content": _safe_value(
+            message.get("content"), parse_json_strings=(role == "tool")
+        ),
+    }
+    if role == "tool":
+        if message.get("tool_call_id"):
+            item["tool_call_id"] = message.get("tool_call_id")
+        if message.get("name"):
+            item["name"] = _safe_value(message.get("name"))
+    if message.get("tool_calls"):
+        item["tool_calls"] = _safe_value(
+            message.get("tool_calls"), parse_json_strings=True
+        )
+    return item
+
+
 def _serialize_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list):
         return []
     serialized = []
     for message in messages[-12:]:
-        if not isinstance(message, dict):
-            continue
-        role = message.get("role")
-        item = {
-            "role": role,
-            "content": _safe_value(
-                message.get("content"), parse_json_strings=(role == "tool")
-            ),
-        }
-        if role == "tool":
-            if message.get("tool_call_id"):
-                item["tool_call_id"] = message.get("tool_call_id")
-            if message.get("name"):
-                item["name"] = _safe_value(message.get("name"))
-        if message.get("tool_calls"):
-            item["tool_calls"] = _safe_value(
-                message.get("tool_calls"), parse_json_strings=True
-            )
-        serialized.append(item)
+        item = _serialize_one_message(message)
+        if item is not None:
+            serialized.append(item)
     return serialized
 
 
