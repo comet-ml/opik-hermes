@@ -18,31 +18,27 @@ plugin, swapped to the Opik Python SDK.
 
 ## Install
 
-The plugin reaches Hermes one of two ways:
-
-### As a pip plugin (entry-point)
+Install the package into the same Python environment as Hermes, then enable
+the plugin:
 
 ```bash
-pip install opik-hermes        # exposes the `hermes_agent.plugins` entry point
+pip install opik-hermes
 hermes plugins enable observability/opik
 ```
 
-### As a user plugin (bundled / mounted)
-
-Drop `observability/opik/` into `~/.hermes/plugins/opik/`, then:
-
-```bash
-pip install opik
-hermes plugins enable observability/opik
-```
+`pip install opik-hermes` pulls in the `opik` SDK automatically (it's a
+declared dependency) and registers the plugin with Hermes via the
+`hermes_agent.plugins` entry point — no manual file copying.
 
 ## Configure
+
+Set these in `~/.hermes/.env` (or via `hermes tools`).
 
 Local open-source Opik needs **no API key**:
 
 ```bash
 # ~/.hermes/.env
-OPIK_URL_OVERRIDE=http://localhost:5174/api
+OPIK_URL_OVERRIDE=http://localhost:5173/api
 OPIK_PROJECT_NAME=hermes
 ```
 
@@ -52,6 +48,19 @@ Comet-hosted Opik:
 OPIK_API_KEY=...
 OPIK_WORKSPACE=your-workspace
 ```
+
+## Use it
+
+Talk to Hermes however you normally do — every turn is traced to the
+`hermes` project (or whatever `OPIK_PROJECT_NAME` you set):
+
+```bash
+hermes chat -q "list the files here and tell me how many there are"
+```
+
+…or open the Hermes web UI at **http://localhost:9119** and use the Chat tab.
+Then open Opik and look for a trace named after your message, with an LLM span
+and a span per tool call.
 
 See [`observability/opik/README.md`](observability/opik/README.md) for the
 full configuration and tuning reference.

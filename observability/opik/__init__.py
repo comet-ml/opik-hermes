@@ -12,11 +12,11 @@ if the SDK is missing the hooks are inert.
 
 Configuration (set via ``hermes tools`` or ~/.hermes/.env):
   OPIK_API_KEY        - Opik/Comet API key. NOT required for a local
-                        open-source Opik (http://localhost:5174/api) — only
+                        open-source Opik (http://localhost:5173/api) — only
                         for Comet-hosted or self-hosted-with-auth deployments.
   OPIK_URL_OVERRIDE   - Opik API base URL. Defaults to the Opik SDK default
                         (Comet cloud). For local Opik set e.g.
-                        http://localhost:5174/api.
+                        http://localhost:5173/api.
   OPIK_WORKSPACE      - Opik workspace name (Comet-hosted only).
   OPIK_PROJECT_NAME   - Project to log traces under (default: "hermes").
 
