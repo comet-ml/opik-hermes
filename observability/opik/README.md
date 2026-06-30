@@ -9,8 +9,7 @@ This plugin is **opt-in** — it only loads when you explicitly enable it.
 ## Enable
 
 ```bash
-# Manual
-pip install opik
+pip install opik-hermes      # also pulls in the `opik` SDK
 hermes plugins enable observability/opik
 ```
 
@@ -20,7 +19,7 @@ Set these in `~/.hermes/.env` (or via `hermes tools`):
 
 ```bash
 # Local open-source Opik — NO API key required:
-OPIK_URL_OVERRIDE=http://localhost:5174/api
+OPIK_URL_OVERRIDE=http://localhost:5173/api
 OPIK_PROJECT_NAME=hermes
 
 # Comet-hosted / self-hosted-with-auth Opik:
@@ -34,8 +33,11 @@ Without the `opik` SDK the hooks no-op silently — the plugin fails open.
 
 ```bash
 hermes plugins list                 # observability/opik should show "enabled"
-hermes chat -q "hello"              # then check Opik for a "Hermes turn" trace
+hermes chat -q "hello"              # one-shot turn from the CLI
 ```
+
+…or open the Hermes web UI at **http://localhost:9119** and use the Chat tab.
+Either way, check Opik for a trace named after your message.
 
 ## Optional tuning
 
