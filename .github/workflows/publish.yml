@@ -1,0 +1,122 @@
+name: Publish
+
+run-name: "Publish opik-hermes (${{ github.event_name }}) by @${{ github.actor }}"
+
+# Two targets — deliberate, like the other Opik packages (no publish on every
+# push):
+#   - TestPyPI: via manual `workflow_dispatch` with target=testpypi. Run it
+#     from any branch to exercise the full build→upload→install flow before a
+#     real release. Bump the version in pyproject.toml first so the upload
+#     doesn't collide (TestPyPI/PyPI reject re-uploading a version —
+#     skip-existing turns that into a no-op rather than a failure).
+#   - PyPI: on a published GitHub Release (the real release), or dispatch with
+#     target=pypi. Uses the org PYPI_API_TOKEN, same as the other Opik packages.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist + wheel
+        run: |
+          pip install -U pip build
+          python -m build --sdist --wheel --outdir dist/ .
+
+      - name: Verify wheel exposes the plugin entry point
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          assert "opik_hermes/__init__.py" in names, "plugin module missing from wheel"
+          body = zipfile.ZipFile(wheel).read(
+              next(n for n in names if n.endswith("entry_points.txt"))
+          ).decode()
+          assert "hermes_agent.plugins" in body and "opik_hermes:register" in body, (
+              "hermes_agent.plugins entry point missing"
+          )
+          print("OK:", wheel)
+          PY
+
+      # --- Decide target -----------------------------------------------------
+      # release         -> pypi
+      # workflow_dispatch-> the chosen input
+      # push (branch/PR) -> testpypi
+      - name: Resolve publish target
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "to=pypi" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "to=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "to=testpypi" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- Token preflight ---------------------------------------------------
+      # Fail fast with an actionable message rather than reaching the upload
+      # step with a missing/malformed token. Probes the matching upload
+      # endpoint: 400/422 = auth OK + empty payload (success for a preflight),
+      # 401/403 = token rejected.
+      - name: Token preflight
+        env:
+          TARGET: ${{ steps.target.outputs.to }}
+          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          set -e
+          if [ "$TARGET" = "pypi" ]; then
+            TOKEN="$PYPI_TOKEN"; URL="https://upload.pypi.org/legacy/"; NAME="PYPI_API_TOKEN"
+          else
+            TOKEN="$TEST_PYPI_TOKEN"; URL="https://test.pypi.org/legacy/"; NAME="TEST_PYPI_API_TOKEN"
+          fi
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error title=Publish preflight::$NAME is empty. Add it to the repo/org secrets before publishing to $TARGET."
+            exit 1
+          fi
+          if [[ "$TOKEN" != pypi-* ]]; then
+            echo "::error title=Publish preflight::$NAME does not start with 'pypi-'."
+            exit 1
+          fi
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -u "__token__:${TOKEN}" -H "User-Agent: opik-hermes-release-preflight" "$URL" || echo "000")
+          echo "Preflight HTTP $CODE against $URL"
+          case "$CODE" in
+            400|422|200) echo "Token accepted by $TARGET." ;;
+            401|403) echo "::error title=Publish preflight::$NAME rejected by $TARGET (HTTP $CODE)."; exit 1 ;;
+            *) echo "::warning title=Publish preflight::Unexpected HTTP $CODE; proceeding to upload." ;;
+          esac
+
+      - name: Publish to TestPyPI
+        if: steps.target.outputs.to == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+      - name: Publish to PyPI
+        if: steps.target.outputs.to == 'pypi'
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true

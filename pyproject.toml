@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opik-hermes"
-version = "0.1.0"
+version = "0.1.1"
 description = "Opik observability plugin for the Hermes agent — traces conversations, LLM calls, and tool usage to Opik."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
