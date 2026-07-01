@@ -47,14 +47,14 @@ jobs:
           path: /tmp/opik-e2e-journal.jsonl
           if-no-files-found: ignore
 
-  # Heavier variant: runs against a REAL Opik backend (its own compose stack)
-  # and asserts via the real REST API. Only on schedule + manual dispatch —
-  # NOT on PRs — because standing up ~6 Opik services is slow and adds flake
-  # surface; the fast mock E2E above is the per-PR gate. This job exists to
-  # catch real SDK<->backend / ingestion drift periodically.
+  # Heavier variant: real Hermes container + real Opik backend (its own compose
+  # stack — mysql/redis/clickhouse/minio/backend, no host ports) with the trace
+  # asserted via the real REST API. LLM is still mocked (no cost/keys). Runs on
+  # every PR (and push/cron/dispatch) for full real-Hermes + real-Opik coverage;
+  # it's slower than the mock E2E (stands up ~6 Opik services), hence its own
+  # job + a longer timeout, and it does not block the fast mock signal.
   e2e-real-opik:
     name: E2E against real Opik
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
