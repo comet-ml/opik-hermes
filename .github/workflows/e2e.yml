@@ -1,0 +1,65 @@
+name: E2E
+
+# Runs the plugin against the real latest Hermes image, driven by a mock LLM
+# and a mock Opik — fully self-contained (no real keys, the agent has no
+# internet). The daily cron catches new Hermes releases that break the plugin,
+# same intent as the OpenClaw integration's scheduled E2E.
+on:
+  pull_request:
+    paths:
+      - "observability/**"
+      - "e2e/**"
+      - ".github/workflows/e2e.yml"
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - "observability/**"
+      - "e2e/**"
+      - ".github/workflows/e2e.yml"
+  schedule:
+    - cron: "17 6 * * *" # daily ~06:17 UTC — catch Hermes `latest` drift
+  workflow_dispatch:
+    inputs:
+      hermes_image:
+        description: "Hermes image to test against"
+        default: "nousresearch/hermes-agent:latest"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E against latest Hermes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run mock E2E
+        env:
+          HERMES_IMAGE: ${{ inputs.hermes_image || 'nousresearch/hermes-agent:latest' }}
+        run: bash e2e/run_e2e.sh
+      - name: Upload journal on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opik-e2e-journal
+          path: /tmp/opik-e2e-journal.jsonl
+          if-no-files-found: ignore
+
+  # Heavier variant: real Hermes container + real Opik backend (its own compose
+  # stack — mysql/redis/clickhouse/minio/backend, no host ports) with the trace
+  # asserted via the real REST API. LLM is still mocked (no cost/keys). Runs on
+  # every PR (and push/cron/dispatch) for full real-Hermes + real-Opik coverage;
+  # it's slower than the mock E2E (stands up ~6 Opik services), hence its own
+  # job + a longer timeout, and it does not block the fast mock signal.
+  e2e-real-opik:
+    name: E2E against real Opik
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run real-Opik E2E
+        env:
+          HERMES_IMAGE: ${{ inputs.hermes_image || 'nousresearch/hermes-agent:latest' }}
+        run: bash e2e/run_e2e_real_opik.sh
