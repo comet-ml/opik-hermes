@@ -1,0 +1,24 @@
+# Override for the real-Opik E2E: don't publish any host ports.
+#
+# The E2E talks to Opik entirely container-to-container (Hermes reaches the
+# backend by service name on the compose network), so no host ports are
+# needed. Zeroing them avoids collisions with any Opik already running on the
+# host and is the correct shape for CI too. Applied on top of Opik's own
+# docker-compose via `-f`.
+services:
+  backend:
+    ports: []
+  frontend:
+    ports: []
+  mysql:
+    ports: []
+  clickhouse:
+    ports: []
+  redis:
+    ports: []
+  minio:
+    ports: []
+  zookeeper:
+    ports: []
+  python-backend:
+    ports: []

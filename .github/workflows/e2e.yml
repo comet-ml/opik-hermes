@@ -46,3 +46,20 @@ jobs:
           name: opik-e2e-journal
           path: /tmp/opik-e2e-journal.jsonl
           if-no-files-found: ignore
+
+  # Heavier variant: runs against a REAL Opik backend (its own compose stack)
+  # and asserts via the real REST API. Only on schedule + manual dispatch —
+  # NOT on PRs — because standing up ~6 Opik services is slow and adds flake
+  # surface; the fast mock E2E above is the per-PR gate. This job exists to
+  # catch real SDK<->backend / ingestion drift periodically.
+  e2e-real-opik:
+    name: E2E against real Opik
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run real-Opik E2E
+        env:
+          HERMES_IMAGE: ${{ inputs.hermes_image || 'nousresearch/hermes-agent:latest' }}
+        run: bash e2e/run_e2e_real_opik.sh
