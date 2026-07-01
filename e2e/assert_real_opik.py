@@ -37,19 +37,27 @@ def main() -> None:
     if not traces:
         sys.exit("FAIL: no traces in real Opik")
 
-    # The /traces LIST projection omits some fields (e.g. name), so fetch the
-    # full record by id for the name/end_time checks.
     t = get(f"traces/{traces[0]['id']}")
     spans = get("spans", project_id=pid, trace_id=t["id"], size=30).get("content", [])
     llm = [s for s in spans if s.get("type") == "llm"]
     tool = [s for s in spans if s.get("type") == "tool"]
     na = [s for s in spans if not s.get("name") or not s.get("type")]
 
-    print(f"trace={t.get('name')!r} end_time={t.get('end_time')}")
+    # Thread grouping: the plugin sets thread_id = Hermes session_id. The
+    # /traces projection in this Opik version does NOT return name/thread_id on
+    # the trace object, but the threads endpoint does — so assert the thread
+    # there. (Confirmed: a trace created with thread_id shows up under
+    # /traces/threads even though the trace object omits the field.)
+    threads = get("traces/threads", project_id=pid, size=20).get("content", [])
+    thread_ids = [th.get("thread_id") or th.get("id") for th in threads]
+
+    print(f"end_time={t.get('end_time')}")
     print(f"spans={len(spans)} llm={len(llm)} tool={len(tool)} NA={len(na)}")
+    print(f"threads={thread_ids}")
 
     # Hard checks: what proves the integration works — the trace was created,
-    # finalized, and carries correctly-typed LLM + tool spans with no NA spans.
+    # finalized, carries correctly-typed LLM + tool spans with no NA spans, and
+    # is grouped into a thread (session grouping).
     errors = []
     if not t.get("end_time"):
         errors.append("trace not finalized (end_time is null)")
@@ -59,14 +67,12 @@ def main() -> None:
         errors.append("no tool spans")
     if na:
         errors.append(f"{len(na)} NA span(s)")
+    if not thread_ids:
+        errors.append("no thread recorded (session grouping missing)")
 
-    # Soft check: the trace name (descriptive, from the user message) is set by
-    # the plugin — verified in the mock E2E's captured payload. Whether the
-    # REST API returns it here is Opik-version-dependent, so warn rather than
-    # fail if the API response omits it.
-    if not t.get("name"):
-        print("  WARN: trace name not present in this Opik API response "
-              "(plugin sets it; verified in the mock E2E)")
+    # The descriptive trace name is set by the plugin (verified in the mock E2E
+    # payload) but this Opik version's /traces projection omits the name field,
+    # so it is not asserted here.
 
     if errors:
         print("=== REAL-OPIK E2E FAILED ===")
