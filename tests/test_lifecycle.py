@@ -170,3 +170,41 @@ def test_per_api_call_does_not_prematurely_finalize(plugin):
 def test_session_id_becomes_thread_id(plugin):
     _run_turn_with_tool(plugin)
     assert plugin._fake.traces[0].create_kwargs.get("thread_id") == "s"
+
+
+# --- Regression: NA trace name (the trace-level twin of the NA-span bug) -----
+# The root trace's name/thread_id/input are set only at creation. For a fast
+# turn the create message coalesced with the finalize update()+end() in one SDK
+# batch window, and the trace landed with name=None/thread_id=None/input=null —
+# an "NA" trace in the UI. Confirmed against real Opik: a trace created then
+# immediately updated+ended loses its name, while one whose create is flushed
+# first keeps it. We flush right after trace creation to close the create's
+# batch; these guard that invariant so the bug can't silently return.
+
+
+def test_trace_created_with_name_and_thread(plugin):
+    _run_turn_with_tool(plugin)
+    ck = plugin._fake.traces[0].create_kwargs
+    assert ck.get("name"), "root trace must be created WITH a name"
+    assert ck.get("thread_id") == "s"
+    assert ck.get("input") is not None, "root trace must carry input at creation"
+
+
+def test_trace_create_is_flushed_before_finalize(plugin):
+    # The fix: the create message must be sent as its own batch, so it cannot
+    # coalesce with the finalize update()/end() and lose name/thread/input.
+    _run_turn_with_tool(plugin, finalize=True)
+    events = plugin._fake.events
+    create_idx = next(i for i, e in enumerate(events) if e[0] == "client.trace")
+    # There must be a flush AFTER the create and BEFORE the first trace mutation.
+    first_mutation = next(
+        (i for i, e in enumerate(events) if e[0] in ("trace.update", "trace.end")),
+        len(events),
+    )
+    flush_between = any(
+        e[0] == "flush" for e in events[create_idx + 1 : first_mutation]
+    )
+    assert flush_between, (
+        "trace create must be flushed before any update/end so its "
+        "name/thread/input survive the batching race"
+    )

@@ -214,6 +214,18 @@ def _start_root_trace(
         metadata=metadata,
         tags=_tags(),
     )
+    # Send the create as its own batch. name/thread_id/input are set only at
+    # creation (trace.update/end can change output/metadata but the projection
+    # keeps the create's name/thread), so if the create message coalesces with
+    # this turn's later update()+end() in one batch window — which happens for a
+    # fast turn — the trace lands with name=None/thread_id=None/input=null. This
+    # is the trace-level twin of the span NA-bug the create-fully-formed spans
+    # already dodge; the root trace can't be created fully-formed (spans attach
+    # to it during the turn), so we flush to close the create's batch instead.
+    try:
+        client.flush()
+    except Exception as exc:  # pragma: no cover - fail-open
+        _debug(f"flush after trace create failed: {exc}")
     _debug(f"started trace {trace.id} for {task_key}")
     return TraceState(trace=trace)
 

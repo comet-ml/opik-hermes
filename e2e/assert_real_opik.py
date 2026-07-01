@@ -1,8 +1,9 @@
 """Assert a Hermes turn landed in a REAL Opik instance via its REST API.
 
 Run inside a container on the Opik compose network. Resolves the project by
-name, then checks the latest trace has a name, LLM + tool spans, no NA spans,
-and a finalized end_time. Env: BE (backend service name), PROJECT.
+name, then checks the latest trace has a name + thread_id (not an NA trace),
+LLM + tool spans, no NA spans, and a finalized end_time. Env: BE (backend
+service name), PROJECT.
 """
 
 from __future__ import annotations
@@ -43,22 +44,27 @@ def main() -> None:
     tool = [s for s in spans if s.get("type") == "tool"]
     na = [s for s in spans if not s.get("name") or not s.get("type")]
 
-    # Thread grouping: the plugin sets thread_id = Hermes session_id. The
-    # /traces projection in this Opik version does NOT return name/thread_id on
-    # the trace object, but the threads endpoint does — so assert the thread
-    # there. (Confirmed: a trace created with thread_id shows up under
-    # /traces/threads even though the trace object omits the field.)
+    # Thread grouping: the plugin sets thread_id = Hermes session_id.
     threads = get("traces/threads", project_id=pid, size=20).get("content", [])
     thread_ids = [th.get("thread_id") or th.get("id") for th in threads]
 
+    print(f"name={t.get('name')!r} thread_id={t.get('thread_id')!r}")
     print(f"end_time={t.get('end_time')}")
     print(f"spans={len(spans)} llm={len(llm)} tool={len(tool)} NA={len(na)}")
     print(f"threads={thread_ids}")
 
-    # Hard checks: what proves the integration works — the trace was created,
-    # finalized, carries correctly-typed LLM + tool spans with no NA spans, and
-    # is grouped into a thread (session grouping).
+    # Hard checks: what proves the integration works — the trace was created
+    # WITH its name/thread (not an NA trace), finalized, and carries
+    # correctly-typed LLM + tool spans with no NA spans.
     errors = []
+    # The trace name and thread_id are set only at creation. If the create
+    # message coalesces with the finalize update()/end() in one batch window
+    # (a fast turn), the trace lands with name=None/thread_id=None — an "NA"
+    # trace. The plugin flushes the create to prevent this; assert it held.
+    if not t.get("name"):
+        errors.append("trace has no name (NA trace — create/finalize batching race)")
+    if not t.get("thread_id"):
+        errors.append("trace has no thread_id (session grouping lost to the race)")
     if not t.get("end_time"):
         errors.append("trace not finalized (end_time is null)")
     if not llm:
@@ -69,10 +75,6 @@ def main() -> None:
         errors.append(f"{len(na)} NA span(s)")
     if not thread_ids:
         errors.append("no thread recorded (session grouping missing)")
-
-    # The descriptive trace name is set by the plugin (verified in the mock E2E
-    # payload) but this Opik version's /traces projection omits the name field,
-    # so it is not asserted here.
 
     if errors:
         print("=== REAL-OPIK E2E FAILED ===")
