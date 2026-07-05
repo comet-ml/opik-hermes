@@ -13,19 +13,69 @@ pip install opik-hermes      # also pulls in the `opik` SDK
 hermes plugins enable observability/opik
 ```
 
-## Configuration
+## Point hermes at your Opik
 
-Set these in `~/.hermes/.env` (or via `hermes tools`):
+Set these in `~/.hermes/.env` (or via `hermes tools`). The Opik Python SDK reads
+the `OPIK_*` env vars directly — there is no interactive step required. See
+[`.env.example`](.env.example) for a copy-paste template.
+
+### Opik Cloud
 
 ```bash
-# Local open-source Opik — NO API key required:
-OPIK_URL_OVERRIDE=http://localhost:5173/api
+OPIK_URL_OVERRIDE=https://www.comet.com/opik/api
+OPIK_API_KEY=your-api-key-here
+OPIK_WORKSPACE=default
 OPIK_PROJECT_NAME=hermes
-
-# Comet-hosted / self-hosted-with-auth Opik:
-OPIK_API_KEY=...
-OPIK_WORKSPACE=your-workspace
 ```
+
+### Self-hosted / local (open-source Opik) — NO API key required
+
+```bash
+OPIK_URL_OVERRIDE=http://localhost:5173/api
+OPIK_WORKSPACE=default
+OPIK_PROJECT_NAME=hermes
+```
+
+### No-auth custom deployment
+
+For an unauthenticated Opik behind your own URL, point at it and omit the key:
+
+```bash
+OPIK_URL_OVERRIDE=https://opik.internal.example.com/api
+OPIK_WORKSPACE=default
+OPIK_PROJECT_NAME=hermes
+```
+
+> With **no** config, the SDK defaults to Opik Cloud (`https://www.comet.com/opik/api`)
+> and, without an API key, silently no-ops — the plugin fails open, so nothing
+> errors and no traces are sent. Always set `OPIK_URL_OVERRIDE` explicitly so
+> traces land where you expect.
+
+### Baked image / container
+
+To get traces flowing on first run with **zero interactive steps**, bake the
+target as image environment (Dockerfile `ENV`, compose `environment:`, or your
+orchestrator's env config):
+
+- `OPIK_URL_OVERRIDE` — the Opik endpoint (required to route away from Cloud)
+- `OPIK_WORKSPACE` — the workspace (`default` for local/open-source)
+- `OPIK_API_KEY` — **only** for authenticated (Comet-hosted / auth'd self-hosted) deployments
+- `OPIK_PROJECT_NAME` — the project to log under (defaults to `hermes`)
+
+The container starts, Hermes loads the plugin, `opik.Opik()` reads these vars,
+and traces flow immediately — no `hermes tools` prompt, no config file.
+
+### Interactive alternative (humans, not containers)
+
+For local setup you can instead run the Opik Python SDK's CLI:
+
+```bash
+opik configure
+```
+
+It walks you through deployment/URL/key/workspace and writes `~/.opik.config`,
+which this plugin's `opik.Opik()` then reads. Explicit `OPIK_*` env vars always
+win over the config file, so the baked-image path above overrides it.
 
 Without the `opik` SDK the hooks no-op silently — the plugin fails open.
 
