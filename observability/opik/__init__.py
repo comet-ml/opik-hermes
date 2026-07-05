@@ -214,20 +214,29 @@ def _start_root_trace(
         metadata=metadata,
         tags=_tags(),
     )
-    # Send the create as its own batch. name/thread_id/input are set only at
-    # creation (trace.update/end can change output/metadata but the projection
-    # keeps the create's name/thread), so if the create message coalesces with
-    # this turn's later update()+end() in one batch window — which happens for a
-    # fast turn — the trace lands with name=None/thread_id=None/input=null. This
-    # is the trace-level twin of the span NA-bug the create-fully-formed spans
-    # already dodge; the root trace can't be created fully-formed (spans attach
-    # to it during the turn), so we flush to close the create's batch instead.
+    # NOTE: the caller flushes this create (via _flush_trace_create) AFTER
+    # releasing _STATE_LOCK. name/thread_id/input are set only at creation, so
+    # the create must not coalesce with the turn's later update()+end() in one
+    # batch window (a fast turn) or the trace lands NA (name=None/thread=None/
+    # input=null) — the trace-level twin of the span NA-bug. flush() blocks on
+    # the network, so it is deliberately kept out of the lock.
+    _debug(f"started trace {trace.id} for {task_key}")
+    return TraceState(trace=trace)
+
+
+def _flush_trace_create(client: Any) -> None:
+    """Flush a just-created root trace as its own batch.
+
+    Called by the pre-hooks AFTER releasing _STATE_LOCK, and only when a new
+    trace was created this call. Closing the create's batch keeps it from
+    coalescing with the turn's later update()+end() (the NA-trace race). flush()
+    is blocking/network-bound, so it must run unlocked to avoid serializing
+    concurrent turns behind it.
+    """
     try:
         client.flush()
     except Exception as exc:  # pragma: no cover - fail-open
         _debug(f"flush after trace create failed: {exc}")
-    _debug(f"started trace {trace.id} for {task_key}")
-    return TraceState(trace=trace)
 
 
 def _merge_trace_output(output: Any, state: TraceState) -> Any:
@@ -326,6 +335,7 @@ def on_pre_llm_call(
         task_id, session_id, turn_id=turn_id, api_request_id=api_request_id
     )
 
+    created = False
     with _STATE_LOCK:
         state = _TRACE_STATE.get(task_key)
         if state is None:
@@ -344,7 +354,10 @@ def on_pre_llm_call(
             )
             _evict_stale_locked()
             _TRACE_STATE[task_key] = state
+            created = True
         state.last_updated_at = time.time()
+    if created:
+        _flush_trace_create(client)
 
 
 def on_pre_llm_request(
@@ -387,6 +400,7 @@ def on_pre_llm_request(
     )
     req_key = _request_key(api_call_count)
 
+    created = False
     with _STATE_LOCK:
         state = _TRACE_STATE.get(task_key)
         if state is None:
@@ -405,6 +419,7 @@ def on_pre_llm_request(
             )
             _evict_stale_locked()
             _TRACE_STATE[task_key] = state
+            created = True
         state.last_updated_at = time.time()
         # Record the call; the span is created (fully formed) at post-time to
         # avoid the create/end batching race for fast API calls. A duplicate
@@ -417,6 +432,8 @@ def on_pre_llm_request(
             model=model,
             provider=provider or "",
         )
+    if created:
+        _flush_trace_create(client)
 
 
 def on_post_llm_call(
