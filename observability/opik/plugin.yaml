@@ -2,11 +2,12 @@ name: opik
 version: "0.1.0"
 description: "Opik observability for Hermes — traces conversations, LLM calls, and tool usage to Opik. Opt-in via `hermes plugins enable observability/opik` or `hermes tools → Opik Observability`."
 author: Comet
-# No env var is unconditionally required: the plugin fails open (hooks no-op)
-# when Opik is unreachable. To route traces set OPIK_URL_OVERRIDE (+ OPIK_WORKSPACE);
-# OPIK_API_KEY is only needed for authenticated (Comet-hosted / self-hosted-with-auth)
-# deployments. With no config the SDK defaults to Opik Cloud and silently no-ops
-# without a key. See .env.example.
+# No env var is unconditionally required: the plugin fails open (its hooks never
+# crash Hermes) when Opik is unreachable. To route traces set OPIK_URL_OVERRIDE
+# (+ OPIK_WORKSPACE); OPIK_API_KEY is only needed for authenticated (Comet-hosted
+# / self-hosted-with-auth) deployments. With no config the SDK defaults to Opik
+# Cloud and, without a key, logs a repeated "API key must be specified" warning
+# and sends nothing (not silent). See .env.example.
 hooks:
   - pre_api_request
   - post_api_request

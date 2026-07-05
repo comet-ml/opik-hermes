@@ -47,9 +47,10 @@ OPIK_PROJECT_NAME=hermes
 ```
 
 > With **no** config, the SDK defaults to Opik Cloud (`https://www.comet.com/opik/api`)
-> and, without an API key, silently no-ops — the plugin fails open, so nothing
-> errors and no traces are sent. Always set `OPIK_URL_OVERRIDE` explicitly so
-> traces land where you expect.
+> and, without an API key, logs a repeated `API key must be specified` warning and
+> sends nothing. The plugin still fails open (its hooks never crash Hermes), but the
+> SDK is **not** silent about the missing key. Always set `OPIK_URL_OVERRIDE`
+> explicitly so traces land where you expect.
 
 ### Baked image / container
 
