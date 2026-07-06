@@ -525,11 +525,12 @@ def on_subagent_stop(
             )
         if state is None and parent:
             # Match on the recorded session_id, not the store key: task-keyed
-            # turns (the common case) don't carry a session: key prefix.
+            # turns (the common case) don't carry a session: key prefix. Only
+            # bind when exactly one turn is live for the session — with multiple
+            # concurrent turns there's no reliable way to pick the parent here
+            # (recency is not it), so skip rather than attach to the wrong trace.
             candidates = [s for s in store.values() if s.session_id == parent]
-            state = (
-                max(candidates, key=lambda s: s.last_updated_at) if candidates else None
-            )
+            state = candidates[0] if len(candidates) == 1 else None
         if state is None:
             return
         now = datetime.datetime.now(datetime.timezone.utc)

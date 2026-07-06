@@ -97,6 +97,30 @@ def test_subagent_stop_no_parent_trace_is_noop(plugin):
     assert plugin._fake.traces == []
 
 
+def test_subagent_stop_skips_when_session_is_ambiguous(plugin):
+    # Two concurrent turns in the same session, and the subagent carries only
+    # parent_session_id (no turn key). There's no reliable way to pick the
+    # parent, so we must skip rather than guess by recency and attach the span
+    # under the wrong turn.
+    for turn in ("T1", "T2"):
+        plugin.on_pre_llm_request(
+            api_call_count=1,
+            messages=[{"role": "user", "content": "hi"}],
+            model="gpt-5",
+            task_id=f"task-{turn}",
+            session_id="sess-multi",
+            turn_id=turn,
+        )
+    plugin.on_subagent_stop(
+        parent_session_id="sess-multi", child_role="coder", child_status="completed"
+    )
+    # No subagent span attached to either turn's trace.
+    for trace in plugin._fake.traces:
+        assert not any(
+            s.create_kwargs.get("metadata", {}).get("subagent") for s in trace.spans
+        )
+
+
 # --- session lifecycle ------------------------------------------------------
 
 
