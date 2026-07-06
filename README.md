@@ -1,11 +1,38 @@
-# opik-hermes
+<h1 align="center" style="border-bottom: none">
+  <div>
+    <a href="https://www.comet.com/site/products/opik/?from=llm&utm_source=opik&utm_medium=github&utm_content=header_img&utm_campaign=opik">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/comet-ml/opik/refs/heads/main/apps/opik-documentation/documentation/static/img/logo-dark-mode.svg">
+        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/comet-ml/opik/refs/heads/main/apps/opik-documentation/documentation/static/img/opik-logo.svg">
+        <img alt="Comet Opik logo" src="https://raw.githubusercontent.com/comet-ml/opik/refs/heads/main/apps/opik-documentation/documentation/static/img/opik-logo.svg" width="200" />
+      </picture>
+    </a>
+    <br />
+    🔭 Opik Observability for Hermes
+  </div>
+</h1>
 
-Opik observability for the [Hermes agent](https://github.com/NousResearch/hermes-agent).
+<p align="center">
+  Plugin for the <a href="https://github.com/NousResearch/hermes-agent">Hermes agent</a> that exports conversation, LLM, and tool traces to <br/>
+  <a href="https://www.comet.com/docs/opik/">Opik</a> for observability and monitoring.
+</p>
 
-Traces Hermes conversations, LLM calls, and tool usage to
-[Opik](https://github.com/comet-ml/opik) — Comet's open-source LLM and agent
-observability platform. Modeled on Hermes' bundled Langfuse observability
-plugin, swapped to the Opik Python SDK.
+<div align="center">
+
+[![License](https://img.shields.io/github/license/comet-ml/opik-hermes)](./LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/opik-hermes)](https://pypi.org/project/opik-hermes/)
+[![Python versions](https://img.shields.io/pypi/pyversions/opik-hermes)](https://pypi.org/project/opik-hermes/)
+
+</div>
+
+## Why this plugin
+
+[Opik](https://github.com/comet-ml/opik) is Comet's open-source LLM and agent
+observability, tracing, evaluation, and optimization platform. `opik-hermes`
+adds native Opik tracing for [Hermes agent](https://github.com/NousResearch/hermes-agent)
+runs — conversations, LLM calls, and tool usage — with no code changes to your
+agent. Modeled on Hermes' bundled Langfuse observability plugin, swapped to the
+Opik Python SDK.
 
 ## What it captures
 

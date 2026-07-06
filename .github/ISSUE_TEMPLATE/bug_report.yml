@@ -1,0 +1,64 @@
+name: Bug report
+description: Report a reproducible problem with the Hermes Opik plugin.
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Clear and concise description of the bug.
+      placeholder: The plugin fails to export traces when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps and commands to reproduce.
+      placeholder: |
+        1. Install `pip install opik-hermes`
+        2. Enable `hermes plugins enable observability/opik`
+        3. Set OPIK_URL_OVERRIDE and run `hermes chat -q "hello"`
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: A trace should appear in the Opik project ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: No traces appear and logs show ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Provide versions and runtime details.
+      placeholder: |
+        - opik-hermes version:
+        - hermes version:
+        - opik SDK version:
+        - python version:
+        - OS:
+        - Opik deployment (Cloud / self-hosted / local):
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste sanitized logs or stack traces (set HERMES_OPIK_DEBUG=true for verbose plugin logging).
+      render: shell

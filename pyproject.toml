@@ -11,6 +11,17 @@ requires-python = ">=3.11,<3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Comet" }]
+keywords = ["opik", "hermes", "observability", "tracing", "llm", "agent", "comet"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "opik>=2.0.0",
 ]
@@ -18,6 +29,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/comet-ml/opik-hermes"
 Repository = "https://github.com/comet-ml/opik-hermes"
+Issues = "https://github.com/comet-ml/opik-hermes/issues"
+Documentation = "https://www.comet.com/docs/opik/"
 
 # Hermes discovers pip-installed plugins via this entry-point group. The
 # value points at the package's register(ctx) entry module.
