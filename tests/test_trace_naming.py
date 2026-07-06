@@ -68,5 +68,5 @@ def test_falls_back_when_user_content_empty(plugin):
 
 
 def test_trace_name_helper_returns_none_for_non_list(plugin):
-    assert plugin._trace_name_from_messages("not a list") is None
-    assert plugin._trace_name_from_messages(None) is None
+    assert plugin.sanitize.trace_name_from_messages("not a list") is None
+    assert plugin.sanitize.trace_name_from_messages(None) is None

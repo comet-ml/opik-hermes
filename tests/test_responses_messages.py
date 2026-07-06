@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def _ser(plugin, messages):
-    return plugin._serialize_messages(messages)
+    return plugin.sanitize.serialize_messages(messages)
 
 
 def test_chat_completions_message_unchanged(plugin):

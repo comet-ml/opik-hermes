@@ -64,8 +64,8 @@ HOOK_CALLS = [
 @pytest.mark.parametrize("hook_name,kwargs", HOOK_CALLS)
 def test_hooks_noop_when_sdk_missing(plugin_no_sdk, hook_name, kwargs):
     getattr(plugin_no_sdk, hook_name)(**kwargs)  # must not raise
-    # _get_opik should short-circuit to None and cache the failure.
-    assert plugin_no_sdk._get_opik() is None
+    # get_client should short-circuit to None and cache the failure.
+    assert plugin_no_sdk.client.get_client() is None
 
 
 def test_register_wires_expected_hooks(plugin_no_sdk):
