@@ -6,7 +6,7 @@ import threading
 from typing import Any
 
 
-def _scope_prefix(task_id: str, session_id: str) -> str:
+def scope_prefix(task_id: str, session_id: str) -> str:
     """The task/session/thread prefix shared by every trace-key shape."""
     if task_id:
         return f"task:{task_id}"
@@ -15,7 +15,7 @@ def _scope_prefix(task_id: str, session_id: str) -> str:
     return f"thread:{threading.get_ident()}"
 
 
-def _trace_key(
+def trace_key(
     task_id: str,
     session_id: str,
     *,
@@ -32,13 +32,13 @@ def _trace_key(
     ``api_request_id``) resolves to the same key as the request-level hooks.
     """
     if turn_id:
-        return f"{_scope_prefix(task_id, session_id)}:turn:{turn_id}"
+        return f"{scope_prefix(task_id, session_id)}:turn:{turn_id}"
     if api_request_id:
-        return f"{_scope_prefix(task_id, session_id)}:api:{api_request_id}"
+        return f"{scope_prefix(task_id, session_id)}:api:{api_request_id}"
     if task_id:
         return task_id
-    return _scope_prefix(task_id, session_id)
+    return scope_prefix(task_id, session_id)
 
 
-def _request_key(api_call_count: Any) -> str:
+def request_key(api_call_count: Any) -> str:
     return str(api_call_count or 0)

@@ -106,10 +106,15 @@ class FakeOpik:
 
 @pytest.fixture
 def plugin():
-    """A freshly-loaded plugin module with a FakeOpik client already installed."""
+    """A freshly-loaded plugin module with a FakeOpik client already installed.
+
+    The plugin is a package; its submodules load under the same fresh parent so
+    module-global state (client cache, trace store) is isolated per test. Tests
+    reach cohesive modules via ``plugin.client`` / ``plugin.state`` / etc.
+    """
     mod = _load_plugin_module()
     client = FakeOpik()
-    mod._OPIK_CLIENT = client
+    mod.client.set_client(client)
     mod._fake = client  # convenience handle for assertions
     return mod
 
@@ -118,6 +123,6 @@ def plugin():
 def plugin_no_sdk():
     """A plugin module loaded as if the opik SDK were missing (fail-open path)."""
     mod = _load_plugin_module()
-    mod._opik_sdk = None
-    mod._OPIK_CLIENT = None
+    mod.client._opik_sdk = None
+    mod.client.set_client(None)
     return mod

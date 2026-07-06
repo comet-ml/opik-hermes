@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from .config import _debug
+from .config import debug
 
 
-def _opik_usage_from_canonical(
+def opik_usage_from_canonical(
     *,
     input_tokens: int,
     output_tokens: int,
@@ -36,7 +36,7 @@ def _opik_usage_from_canonical(
     return usage
 
 
-def _usage_and_cost(
+def usage_and_cost(
     response: Any, *, provider: str, api_mode: str, model: str, base_url: str
 ) -> tuple[dict[str, int], Optional[float]]:
     """Return (opik_usage_dict, total_cost_usd) from a provider response.
@@ -56,7 +56,7 @@ def _usage_and_cost(
         from agent.usage_pricing import estimate_usage_cost, normalize_usage
 
         canonical = normalize_usage(raw_usage, provider=provider, api_mode=api_mode)
-        usage_details = _opik_usage_from_canonical(
+        usage_details = opik_usage_from_canonical(
             input_tokens=canonical.input_tokens,
             output_tokens=canonical.output_tokens,
             cache_read=canonical.cache_read_tokens,
@@ -69,12 +69,12 @@ def _usage_and_cost(
         if cost.amount_usd is not None:
             total_cost = float(cost.amount_usd)
     except Exception as exc:  # pragma: no cover - fail-open
-        _debug(f"usage normalization failed: {exc}")
+        debug(f"usage normalization failed: {exc}")
 
     return usage_details, total_cost
 
 
-def _cost_from_usage_dict(
+def cost_from_usage_dict(
     usage: dict, *, provider: str, base_url: str, model: str
 ) -> Optional[float]:
     """Best-effort USD cost from a pre-built usage summary dict (post_api_request).

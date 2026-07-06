@@ -41,7 +41,7 @@ opik = "opik_hermes:register"
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [tool.setuptools]
-packages = ["opik_hermes"]
+packages = ["opik_hermes", "opik_hermes.sanitize"]
 
 [tool.setuptools.package-dir]
 opik_hermes = "observability/opik"
