@@ -32,6 +32,7 @@ from .state import (
     TraceState,
     ensure_trace_state,
     lock,
+    states_for_session,
     store,
 )
 from .usage import cost_from_usage_dict, opik_usage_from_canonical, usage_and_cost
@@ -524,13 +525,12 @@ def on_subagent_stop(
                 )
             )
         if state is None and parent:
-            # Match on the recorded session_id, not the store key: task-keyed
-            # turns (the common case) don't carry a session: key prefix. Only
-            # bind when exactly one turn is live for the session — with multiple
-            # concurrent turns there's no reliable way to pick the parent here
-            # (recency is not it), so skip rather than attach to the wrong trace.
-            candidates = [s for s in store.values() if s.session_id == parent]
-            state = candidates[0] if len(candidates) == 1 else None
+            # Bind only when exactly one turn is live for the session — with
+            # multiple concurrent turns there's no reliable way to pick the
+            # parent here (recency is not it), so skip rather than attach to the
+            # wrong trace.
+            candidates = states_for_session(parent)
+            state = candidates[0][1] if len(candidates) == 1 else None
         if state is None:
             return
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -570,12 +570,8 @@ def on_session_end(
     debug(f"session end: {session_id or task_id}")
     if not session_id:
         return
-    # Match on the session_id recorded on each TraceState, not the store key:
-    # trace_key() keys most turns under task:{task_id}:... when a task_id is
-    # present, so a session:{id} key-prefix scan would miss them and leave them
-    # unfinalized on shutdown.
     with lock:
-        keys = [k for k, s in store.items() if s.session_id == session_id]
+        keys = [k for k, _ in states_for_session(session_id)]
     for key in keys:
         finish_trace(key)
     try:
