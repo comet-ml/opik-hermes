@@ -6,12 +6,26 @@ observability platform.
 
 This plugin is **opt-in** — it only loads when you explicitly enable it.
 
-## Enable
+## Install & enable
+
+Opik isn't bundled in Hermes (unlike the built-in `langfuse` plugin), so install
+it as a third-party plugin, then enable it:
 
 ```bash
-pip install opik-hermes      # also pulls in the `opik` SDK
-hermes plugins enable observability/opik
+pip install opik-hermes            # also pulls in the `opik` SDK
+hermes plugins enable opik         # or run `hermes tools` and pick Opik Observability
 ```
+
+`pip install` registers the plugin via its `hermes_agent.plugins` entry point;
+`hermes plugins list` should then show `opik`.
+
+**Alternative — Hermes' Git installer:** `hermes plugins install comet-ml/opik-hermes --enable`
+clones + enables in one step. It requires the repo to be reachable by your
+`hermes` (Git credentials for a private repo); while `comet-ml/opik-hermes` is
+private, prefer the `pip install` path above.
+
+> Bundling into Hermes (parity with Langfuse, so no install step is needed) is
+> tracked separately.
 
 ## Point hermes at your Opik
 
