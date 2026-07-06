@@ -56,7 +56,7 @@ def start_root_trace(
     # input=null) — the trace-level twin of the span NA-bug. flush() blocks on
     # the network, so it is deliberately kept out of the lock.
     debug(f"started trace {trace.id} for {task_key}")
-    return TraceState(trace=trace)
+    return TraceState(trace=trace, session_id=session_id)
 
 
 def flush_trace_create(client: Any) -> None:

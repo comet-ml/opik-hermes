@@ -68,6 +68,7 @@ class PendingGeneration:
 @dataclass
 class TraceState:
     trace: Any
+    session_id: str = ""
     generations: Dict[str, PendingGeneration] = field(default_factory=dict)
     tools: Dict[str, PendingTool] = field(default_factory=dict)
     pending_tools_by_name: Dict[str, list] = field(default_factory=dict)

@@ -524,11 +524,9 @@ def on_subagent_stop(
                 )
             )
         if state is None and parent:
-            candidates = [
-                s
-                for k, s in store.items()
-                if k.startswith(f"session:{parent}") or k == parent
-            ]
+            # Match on the recorded session_id, not the store key: task-keyed
+            # turns (the common case) don't carry a session: key prefix.
+            candidates = [s for s in store.values() if s.session_id == parent]
             state = (
                 max(candidates, key=lambda s: s.last_updated_at) if candidates else None
             )
@@ -571,8 +569,12 @@ def on_session_end(
     debug(f"session end: {session_id or task_id}")
     if not session_id:
         return
+    # Match on the session_id recorded on each TraceState, not the store key:
+    # trace_key() keys most turns under task:{task_id}:... when a task_id is
+    # present, so a session:{id} key-prefix scan would miss them and leave them
+    # unfinalized on shutdown.
     with lock:
-        keys = [k for k in store if k.startswith(f"session:{session_id}")]
+        keys = [k for k, s in store.items() if s.session_id == session_id]
     for key in keys:
         finish_trace(key)
     try:

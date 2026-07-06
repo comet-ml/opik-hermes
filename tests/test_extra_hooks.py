@@ -114,6 +114,45 @@ def test_session_end_finalizes_open_traces_and_flushes(plugin):
     assert plugin._fake.flushed >= 1
 
 
+def test_session_end_finalizes_task_keyed_traces(plugin):
+    # Regression: with a task_id present, trace_key() stores the turn under
+    # task:{task_id}:... — NOT session:{id}. on_session_end must still finalize
+    # it by matching TraceState.session_id, not a session: key-prefix scan.
+    plugin.on_pre_llm_request(
+        api_call_count=1,
+        messages=[{"role": "user", "content": "hi"}],
+        model="gpt-5",
+        task_id="task-42",
+        session_id="sess-y",
+        turn_id="T1",
+    )
+    key = plugin.keys.trace_key("task-42", "sess-y", turn_id="T1")
+    assert key.startswith("task:"), "precondition: turn is task-keyed"
+    assert not plugin._fake.traces[0].ended
+    plugin.on_session_end(session_id="sess-y")
+    assert plugin._fake.traces[0].ended
+    assert plugin._fake.flushed >= 1
+
+
+def test_subagent_stop_resolves_task_keyed_parent_by_session(plugin):
+    # Regression twin of the above for the subagent_stop fallback scan: a
+    # task-keyed parent trace must be found by session_id when only
+    # parent_session_id is supplied.
+    plugin.on_pre_llm_request(
+        api_call_count=1,
+        messages=[{"role": "user", "content": "hi"}],
+        model="gpt-5",
+        task_id="task-77",
+        session_id="sess-z",
+        turn_id="T1",
+    )
+    plugin.on_subagent_stop(
+        parent_session_id="sess-z", child_role="coder", child_status="completed"
+    )
+    spans = plugin._fake.traces[0].spans
+    assert any(s.create_kwargs.get("metadata", {}).get("subagent") for s in spans)
+
+
 def test_session_end_without_session_id_is_noop(plugin):
     plugin.on_session_end(session_id="")  # must not raise
 
