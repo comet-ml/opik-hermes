@@ -32,6 +32,7 @@ from .state import (
     TraceState,
     ensure_trace_state,
     lock,
+    states_for_session,
     store,
 )
 from .usage import cost_from_usage_dict, opik_usage_from_canonical, usage_and_cost
@@ -524,14 +525,12 @@ def on_subagent_stop(
                 )
             )
         if state is None and parent:
-            candidates = [
-                s
-                for k, s in store.items()
-                if k.startswith(f"session:{parent}") or k == parent
-            ]
-            state = (
-                max(candidates, key=lambda s: s.last_updated_at) if candidates else None
-            )
+            # Bind only when exactly one turn is live for the session — with
+            # multiple concurrent turns there's no reliable way to pick the
+            # parent here (recency is not it), so skip rather than attach to the
+            # wrong trace.
+            candidates = states_for_session(parent)
+            state = candidates[0][1] if len(candidates) == 1 else None
         if state is None:
             return
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -572,7 +571,7 @@ def on_session_end(
     if not session_id:
         return
     with lock:
-        keys = [k for k in store if k.startswith(f"session:{session_id}")]
+        keys = [k for k, _ in states_for_session(session_id)]
     for key in keys:
         finish_trace(key)
     try:

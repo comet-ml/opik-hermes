@@ -68,6 +68,7 @@ class PendingGeneration:
 @dataclass
 class TraceState:
     trace: Any
+    session_id: str = ""
     generations: Dict[str, PendingGeneration] = field(default_factory=dict)
     tools: Dict[str, PendingTool] = field(default_factory=dict)
     pending_tools_by_name: Dict[str, list] = field(default_factory=dict)
@@ -103,6 +104,19 @@ def ensure_trace_state(
         if on_state is not None:
             on_state(state)
     return state, created
+
+
+def states_for_session(session_id: str) -> list[Tuple[str, "TraceState"]]:
+    """Return ``(key, state)`` for every live trace belonging to ``session_id``.
+
+    Matches on the ``session_id`` recorded on each ``TraceState``, not the store
+    key: ``trace_key()`` keys most turns under ``task:{task_id}:...`` when a
+    task_id is present, so a ``session:``-prefix key scan would miss them.
+    Callers hold ``lock`` and apply their own policy — ``on_session_end``
+    finalizes every match; ``on_subagent_stop`` binds only when there's exactly
+    one — so the session-matching rule itself lives in one place.
+    """
+    return [(k, s) for k, s in store.items() if s.session_id == session_id]
 
 
 def evict_stale_locked() -> None:
