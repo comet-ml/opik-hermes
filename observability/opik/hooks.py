@@ -26,7 +26,14 @@ from .sanitize import (
     serialize_assistant_message,
     serialize_messages,
 )
-from .state import PendingGeneration, PendingTool, evict_stale_locked, lock, store
+from .state import (
+    PendingGeneration,
+    PendingTool,
+    TraceState,
+    ensure_trace_state,
+    lock,
+    store,
+)
 from .usage import cost_from_usage_dict, opik_usage_from_canonical, usage_and_cost
 
 
@@ -62,27 +69,22 @@ def on_pre_llm_call(
         task_id, session_id, turn_id=turn_id, api_request_id=api_request_id
     )
 
-    created = False
-    with lock:
-        state = store.get(task_key)
-        if state is None:
-            state = start_root_trace(
-                task_key,
-                task_id=task_id,
-                session_id=session_id,
-                platform=platform,
-                provider=provider,
-                model=model,
-                api_mode=api_mode,
-                messages=messages,
-                client=client,
-                turn_id=turn_id,
-                api_request_id=api_request_id,
-            )
-            evict_stale_locked()
-            store[task_key] = state
-            created = True
-        state.last_updated_at = time.time()
+    _, created = ensure_trace_state(
+        task_key,
+        lambda: start_root_trace(
+            task_key,
+            task_id=task_id,
+            session_id=session_id,
+            platform=platform,
+            provider=provider,
+            model=model,
+            api_mode=api_mode,
+            messages=messages,
+            client=client,
+            turn_id=turn_id,
+            api_request_id=api_request_id,
+        ),
+    )
     if created:
         flush_trace_create(client)
 
@@ -127,27 +129,7 @@ def on_pre_llm_request(
     )
     req_key = request_key(api_call_count)
 
-    created = False
-    with lock:
-        state = store.get(task_key)
-        if state is None:
-            state = start_root_trace(
-                task_key,
-                task_id=task_id,
-                session_id=session_id,
-                platform=platform,
-                provider=provider,
-                model=model,
-                api_mode=api_mode,
-                messages=input_messages,
-                client=client,
-                turn_id=turn_id,
-                api_request_id=api_request_id,
-            )
-            evict_stale_locked()
-            store[task_key] = state
-            created = True
-        state.last_updated_at = time.time()
+    def record_generation(state: "TraceState") -> None:
         # Record the call; the span is created (fully formed) at post-time to
         # avoid the create/end batching race for fast API calls. A duplicate
         # req_key just overwrites the pending record (no span to end yet).
@@ -159,6 +141,24 @@ def on_pre_llm_request(
             model=model,
             provider=provider or "",
         )
+
+    _, created = ensure_trace_state(
+        task_key,
+        lambda: start_root_trace(
+            task_key,
+            task_id=task_id,
+            session_id=session_id,
+            platform=platform,
+            provider=provider,
+            model=model,
+            api_mode=api_mode,
+            messages=input_messages,
+            client=client,
+            turn_id=turn_id,
+            api_request_id=api_request_id,
+        ),
+        on_state=record_generation,
+    )
     if created:
         flush_trace_create(client)
 

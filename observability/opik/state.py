@@ -12,7 +12,7 @@ import datetime
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from .config import debug
 
@@ -73,6 +73,36 @@ class TraceState:
     pending_tools_by_name: Dict[str, list] = field(default_factory=dict)
     turn_tool_calls: list[dict[str, Any]] = field(default_factory=list)
     last_updated_at: float = field(default_factory=time.time)
+
+
+def ensure_trace_state(
+    task_key: str,
+    factory: Callable[[], "TraceState"],
+    *,
+    on_state: Optional[Callable[["TraceState"], None]] = None,
+) -> Tuple["TraceState", bool]:
+    """Get-or-create the trace state for ``task_key`` under the store lock.
+
+    Shared by the LLM pre-hooks. On a miss, ``factory()`` builds a new
+    ``TraceState`` (a deferred ``start_root_trace``), the store is made room for
+    via eviction, and the entry is inserted. ``last_updated_at`` is always
+    touched. ``on_state`` runs under the same lock so a caller's extra
+    bookkeeping (e.g. recording a pending generation) stays in the single lock
+    acquisition. Returns ``(state, created)``; the caller flushes the create
+    outside the lock when ``created`` is True (the NA-trace race — see
+    ``lifecycle.flush_trace_create``).
+    """
+    with lock:
+        state = store.get(task_key)
+        created = state is None
+        if created:
+            state = factory()
+            evict_stale_locked()
+            store[task_key] = state
+        state.last_updated_at = time.time()
+        if on_state is not None:
+            on_state(state)
+    return state, created
 
 
 def evict_stale_locked() -> None:
