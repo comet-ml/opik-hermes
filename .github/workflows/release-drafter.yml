@@ -4,13 +4,11 @@ name: Release Drafter
 # draft notes + proposed version — it never publishes. A human still reviews
 # the draft, bumps pyproject.toml, and clicks Publish, which is what triggers
 # publish.yml → PyPI.
+# Runs only on push to main — release-drafter reads its config from the default
+# branch, so it can't run meaningfully on PRs anyway (including its own).
 on:
   push:
     branches: [main]
-  # Recompute the draft when a PR is opened/edited so its title lands in the
-  # right category before merge.
-  pull_request:
-    types: [opened, reopened, edited, synchronize]
 
 permissions:
   contents: read
