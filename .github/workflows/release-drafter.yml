@@ -1,0 +1,27 @@
+name: Release Drafter
+
+# Keep a draft GitHub Release up to date as PRs merge. This only maintains the
+# draft notes + proposed version — it never publishes. A human still reviews
+# the draft, bumps pyproject.toml, and clicks Publish, which is what triggers
+# publish.yml → PyPI.
+on:
+  push:
+    branches: [main]
+  # Recompute the draft when a PR is opened/edited so its title lands in the
+  # right category before merge.
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  update_release_draft:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create/update the draft release
+      pull-requests: read
+    steps:
+      - uses: release-drafter/release-drafter@v6.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

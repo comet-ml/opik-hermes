@@ -1,0 +1,39 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+
+# The repo categorizes work by PR-title prefix (feat/fix/docs/chore + a
+# [BE]/[FE]/[SDK]/[CI]/[DOCS] component tag), not by labels — so route PRs into
+# sections by matching the conventional-commit type in the title.
+categories:
+  - title: "🚀 Features"
+    labels: [feature, enhancement]
+    title-includes: ["feat:", "feat("]
+  - title: "🐛 Fixes"
+    labels: [bug, fix]
+    title-includes: ["fix:", "fix("]
+  - title: "📝 Documentation"
+    labels: [documentation]
+    title-includes: ["docs:", "docs("]
+  - title: "🧰 Maintenance"
+    title-includes: ["chore:", "chore(", "refactor:", "refactor(", "test:", "test(", "ci:", "ci("]
+
+change-template: "- $TITLE (#$NUMBER)"
+change-title-escapes: '\<*_&'
+
+# Bump the minor on a feat:, the patch otherwise. Overridable by a
+# major/minor/patch label on any PR in the release.
+version-resolver:
+  minor:
+    labels: [minor, feature, enhancement]
+    title-includes: ["feat:", "feat("]
+  default: patch
+
+exclude-title-prefixes:
+  - "chore(release):"
+
+template: |
+  ## What's changed
+
+  $CHANGES
+
+  **Full changelog**: https://github.com/comet-ml/opik-hermes/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
