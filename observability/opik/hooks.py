@@ -17,6 +17,7 @@ from .client import get_client
 from .config import debug, debug_enabled
 from .keys import request_key, trace_key
 from .lifecycle import finish_trace, flush_trace_create, start_root_trace
+from .providers import to_opik_provider
 from .sanitize import (
     as_input_dict,
     coerce_request_messages,
@@ -287,7 +288,7 @@ def on_post_llm_call(
             usage=usage_details or None,
             total_cost=total_cost,
             model=model or pending.model or None,
-            provider=provider or pending.provider or None,
+            provider=to_opik_provider(provider or pending.provider or None),
             metadata=gen_metadata,
             start_time=pending.start_time,
             end_time=datetime.datetime.now(datetime.timezone.utc),
@@ -477,7 +478,7 @@ def on_api_request_error(
             input=pending.input,
             output={"error": message},
             model=model or pending.model or None,
-            provider=provider or pending.provider or None,
+            provider=to_opik_provider(provider or pending.provider or None),
             error_info={
                 "exception_type": exc_type,
                 "message": message,
