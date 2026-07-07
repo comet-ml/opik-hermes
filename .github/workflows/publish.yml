@@ -90,9 +90,14 @@ jobs:
 
       # --- Token preflight ---------------------------------------------------
       # Fail fast with an actionable message rather than reaching the upload
-      # step with a missing/malformed token. Probes the matching upload
-      # endpoint: 400/422 = auth OK + empty payload (success for a preflight),
+      # step with a malformed token. Probes the matching upload endpoint:
+      # 400/422 = auth OK + empty payload (success for a preflight),
       # 401/403 = token rejected.
+      #
+      # No token => Trusted Publishing (OIDC): there is nothing to preflight, so
+      # skip the probe entirely (and DON'T POST to the upload endpoint — that
+      # request counts against PyPI's upload rate limit even though it can't
+      # authenticate anything). The action + PyPI handle OIDC auth at upload.
       - name: Token preflight
         env:
           TARGET: ${{ steps.target.outputs.to }}
@@ -106,11 +111,11 @@ jobs:
             TOKEN="$TEST_PYPI_TOKEN"; URL="https://test.pypi.org/legacy/"; NAME="TEST_PYPI_API_TOKEN"
           fi
           if [ -z "${TOKEN:-}" ]; then
-            echo "::error title=Publish preflight::$NAME is empty. Add it to the repo/org secrets before publishing to $TARGET."
-            exit 1
+            echo "No $NAME set — assuming Trusted Publishing (OIDC) for $TARGET; skipping token preflight."
+            exit 0
           fi
           if [[ "$TOKEN" != pypi-* ]]; then
-            echo "::error title=Publish preflight::$NAME does not start with 'pypi-'."
+            echo "::error title=Publish preflight::$NAME is set but does not start with 'pypi-'."
             exit 1
           fi
           CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
