@@ -1,0 +1,31 @@
+# E2E image for the PIP-INSTALL path: install opik-hermes from a locally-built
+# wheel into Hermes' venv, so the plugin is discovered via its
+# ``hermes_agent.plugins`` entry point — NOT copied into a plugins directory.
+# This exercises the entry-point discovery path a `pip install opik-hermes` user
+# gets, complementing run_e2e.sh's directory-install path.
+#
+# The build context must contain the built wheel at dist/*.whl (run_e2e_wheel.sh
+# builds it before `docker build`).
+ARG HERMES_IMAGE=nousresearch/hermes-agent:latest
+FROM ${HERMES_IMAGE}
+
+COPY dist/ /tmp/opik-hermes-dist/
+RUN /opt/hermes/.venv/bin/python -m pip install --no-cache-dir /tmp/opik-hermes-dist/*.whl \
+    || uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir /tmp/opik-hermes-dist/*.whl
+
+# Build-time guard for the entry-point-loading contract: Hermes does
+# ep.load() then getattr(<result>, "register"), so the entry point must resolve
+# to the MODULE (opik = opik_hermes), not the function (opik_hermes:register).
+# A regression here is exactly the bug this path exists to catch.
+RUN /opt/hermes/.venv/bin/python - <<'PY'
+import types
+from importlib.metadata import entry_points, version
+e = next(x for x in entry_points(group="hermes_agent.plugins") if x.name == "opik")
+loaded = e.load()
+assert isinstance(loaded, types.ModuleType), (
+    f"entry point must load the module, got {type(loaded)!r} — "
+    "check pyproject: opik = opik_hermes (not opik_hermes:register)"
+)
+assert callable(getattr(loaded, "register", None)), "loaded module has no register()"
+print("opik-hermes", version("opik-hermes"), "entry point ->", loaded.__name__, "register OK")
+PY

@@ -63,3 +63,30 @@ jobs:
         env:
           HERMES_IMAGE: ${{ inputs.hermes_image || 'nousresearch/hermes-agent:latest' }}
         run: bash e2e/run_e2e_real_opik.sh
+
+  # PIP-INSTALL path: build the wheel from source, `pip install` it into Hermes,
+  # and drive a turn — so the plugin is discovered via its hermes_agent.plugins
+  # ENTRY POINT (no plugin directory copied in). The mock E2E above covers the
+  # directory-install path; both install methods are supported, so both are
+  # tested. This is the path that would have caught the entry-point-resolves-to-
+  # a-function regression (opik_hermes:register vs opik_hermes).
+  e2e-pip-wheel:
+    name: E2E via pip (entry point)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run pip/wheel E2E
+        env:
+          HERMES_IMAGE: ${{ inputs.hermes_image || 'nousresearch/hermes-agent:latest' }}
+        run: bash e2e/run_e2e_wheel.sh
+      - name: Upload journal on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opik-e2e-wheel-journal
+          path: /tmp/opik-e2e-wheel-journal.jsonl
+          if-no-files-found: ignore

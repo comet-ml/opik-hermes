@@ -67,10 +67,17 @@ jobs:
           body = zipfile.ZipFile(wheel).read(
               next(n for n in names if n.endswith("entry_points.txt"))
           ).decode()
-          assert "hermes_agent.plugins" in body and "opik_hermes:register" in body, (
-              "hermes_agent.plugins entry point missing"
+          # The entry point must resolve to the MODULE (opik = opik_hermes), not
+          # opik_hermes:register — Hermes does ep.load() then getattr(mod,
+          # "register"), so a ":register" suffix breaks plugin loading.
+          import configparser, io
+          cp = configparser.ConfigParser()
+          cp.read_string(body)
+          ep = cp["hermes_agent.plugins"]["opik"].strip()
+          assert ep == "opik_hermes", (
+              f"opik entry point must be 'opik_hermes' (module), got {ep!r}"
           )
-          print("OK:", wheel)
+          print("OK:", wheel, "entry point:", ep)
           PY
 
       # --- Decide target -----------------------------------------------------
