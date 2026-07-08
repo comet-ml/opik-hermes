@@ -53,13 +53,20 @@ jobs:
       - name: Verify the wheel exposes the plugin entry point
         run: |
           python - <<'PY'
-          import glob, zipfile, sys
+          import glob, zipfile, configparser
           wheel = glob.glob("dist/*.whl")[0]
           names = zipfile.ZipFile(wheel).namelist()
           assert "opik_hermes/__init__.py" in names, "plugin module missing from wheel"
           ep = next(n for n in names if n.endswith("entry_points.txt"))
           body = zipfile.ZipFile(wheel).read(ep).decode()
-          assert "hermes_agent.plugins" in body, "hermes_agent.plugins entry point missing"
-          assert "opik_hermes:register" in body, "register entry point missing"
-          print("OK:", wheel)
+          cp = configparser.ConfigParser()
+          cp.read_string(body)
+          # Must resolve to the MODULE (opik = opik_hermes), not opik_hermes:register.
+          # Hermes does ep.load() then getattr(mod, "register"); a ":register"
+          # suffix loads the function instead and breaks plugin loading.
+          val = cp["hermes_agent.plugins"]["opik"].strip()
+          assert val == "opik_hermes", (
+              f"opik entry point must be 'opik_hermes' (module), got {val!r}"
+          )
+          print("OK:", wheel, "entry point opik ->", val)
           PY
