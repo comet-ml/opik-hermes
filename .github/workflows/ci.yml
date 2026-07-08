@@ -52,4 +52,3 @@ jobs:
           python -m build
       - name: Verify the wheel exposes the plugin entry point
         run: python e2e/assert_entrypoint.py
-          PY
