@@ -35,6 +35,10 @@ python3 -m venv "$WORK/.venv"
 "$WORK/.venv/bin/pip" install -q -U build
 "$WORK/.venv/bin/python" -m build --wheel --outdir "$CTX/dist" "$REPO_ROOT" >/dev/null
 cp "$REPO_ROOT/e2e/Dockerfile.wheel" "$CTX/Dockerfile"
+# Stage the shared entry-point check so the Dockerfile can COPY it in (the
+# build-time guard uses the same single-source-of-truth script as CI).
+mkdir -p "$CTX/e2e"
+cp "$REPO_ROOT/e2e/assert_entrypoint.py" "$CTX/e2e/assert_entrypoint.py"
 echo "==> wheel: $(ls "$CTX/dist")"
 
 # --- build the Hermes image with the wheel pip-installed (ep assert at build) -

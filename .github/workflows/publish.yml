@@ -57,8 +57,10 @@ jobs:
           pip install -U pip build
           python -m build --sdist --wheel --outdir dist/ .
 
-      - name: Verify wheel exposes the plugin entry point
-        run: python e2e/assert_entrypoint.py
+      - name: Verify the plugin entry point loads (install wheel, then check)
+        run: |
+          pip install dist/*.whl
+          python e2e/assert_entrypoint.py
 
       # --- Decide target -----------------------------------------------------
       # release         -> pypi

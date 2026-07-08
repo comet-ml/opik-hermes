@@ -13,19 +13,10 @@ COPY dist/ /tmp/opik-hermes-dist/
 RUN /opt/hermes/.venv/bin/python -m pip install --no-cache-dir /tmp/opik-hermes-dist/*.whl \
     || uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir /tmp/opik-hermes-dist/*.whl
 
-# Build-time guard for the entry-point-loading contract: Hermes does
-# ep.load() then getattr(<result>, "register"), so the entry point must resolve
-# to the MODULE (opik = opik_hermes), not the function (opik_hermes:register).
-# A regression here is exactly the bug this path exists to catch.
-RUN /opt/hermes/.venv/bin/python - <<'PY'
-import types
-from importlib.metadata import entry_points, version
-e = next(x for x in entry_points(group="hermes_agent.plugins") if x.name == "opik")
-loaded = e.load()
-assert isinstance(loaded, types.ModuleType), (
-    f"entry point must load the module, got {type(loaded)!r} — "
-    "check pyproject: opik = opik_hermes (not opik_hermes:register)"
-)
-assert callable(getattr(loaded, "register", None)), "loaded module has no register()"
-print("opik-hermes", version("opik-hermes"), "entry point ->", loaded.__name__, "register OK")
-PY
+# Build-time guard for the entry-point-loading contract, using the SAME shared
+# check as ci.yml/publish.yml (single source of truth): it does ep.load() then
+# getattr(<result>, "register") — exactly what Hermes' loader does — so the entry
+# point must resolve to the MODULE (opik = opik_hermes), not the function. This
+# runs against the just-installed package in Hermes' venv.
+COPY e2e/assert_entrypoint.py /tmp/assert_entrypoint.py
+RUN /opt/hermes/.venv/bin/python /tmp/assert_entrypoint.py
