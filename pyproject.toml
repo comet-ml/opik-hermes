@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opik-hermes"
-version = "0.1.0"
+version = "0.1.1"
 description = "Opik observability plugin for the Hermes agent — traces conversations, LLM calls, and tool usage to Opik."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -35,7 +35,12 @@ Documentation = "https://www.comet.com/docs/opik/"
 # Hermes discovers pip-installed plugins via this entry-point group. The
 # value points at the package's register(ctx) entry module.
 [project.entry-points."hermes_agent.plugins"]
-opik = "opik_hermes:register"
+# Points at the MODULE (not opik_hermes:register). Hermes loads the entry point
+# with ep.load() then does getattr(<result>, "register") expecting a module with
+# a register() attribute. A ":register" suffix would load the function itself,
+# so getattr(function, "register") is None -> "no register() function" and no
+# hooks are wired. See the opik_hermes package __init__ which exports register.
+opik = "opik_hermes"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]

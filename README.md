@@ -46,16 +46,27 @@ Opik Python SDK.
 ## Install
 
 Install the package into the same Python environment as Hermes, then enable
-the plugin:
+the plugin by adding it to `plugins.enabled` in `~/.hermes/config.yaml`:
 
 ```bash
 pip install opik-hermes
-hermes plugins enable observability/opik
+```
+
+```yaml
+# ~/.hermes/config.yaml
+plugins:
+  enabled: [opik]
 ```
 
 `pip install opik-hermes` pulls in the `opik` SDK automatically (it's a
 declared dependency) and registers the plugin with Hermes via the
-`hermes_agent.plugins` entry point — no manual file copying.
+`hermes_agent.plugins` entry point (name `opik`) — no manual file copying.
+Enable it through `plugins.enabled` as above; the entry-point name is `opik`.
+
+> This is the **pip install** path. A directory-based install
+> (`hermes plugins install comet-ml/opik-hermes`, enabled via
+> `hermes plugins enable observability/opik`) is tracked separately — see the
+> follow-up work in the repo's issues.
 
 ## Configure
 

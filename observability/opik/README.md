@@ -8,9 +8,17 @@ This plugin is **opt-in** — it only loads when you explicitly enable it.
 
 ## Enable
 
+Install from PyPI, then enable via `plugins.enabled` in `~/.hermes/config.yaml`
+(the entry-point name is `opik`):
+
 ```bash
 pip install opik-hermes      # also pulls in the `opik` SDK
-hermes plugins enable observability/opik
+```
+
+```yaml
+# ~/.hermes/config.yaml
+plugins:
+  enabled: [opik]
 ```
 
 ## Point hermes at your Opik
@@ -83,9 +91,11 @@ Without the `opik` SDK the hooks no-op silently — the plugin fails open.
 ## Verify
 
 ```bash
-hermes plugins list                 # observability/opik should show "enabled"
 hermes chat -q "hello"              # one-shot turn from the CLI
 ```
+
+On startup the plugin logs `OPIK: Started logging traces to ...` once it's
+enabled and connected.
 
 …or open the Hermes web UI at **http://localhost:9119** and use the Chat tab.
 Either way, check Opik for a trace named after your message.
@@ -100,6 +110,5 @@ HERMES_OPIK_DEBUG=true               # verbose plugin logging
 
 ## Disable
 
-```bash
-hermes plugins disable observability/opik
-```
+Remove `opik` from `plugins.enabled` in `~/.hermes/config.yaml` (or delete the
+whole `enabled` entry).

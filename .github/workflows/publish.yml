@@ -57,21 +57,10 @@ jobs:
           pip install -U pip build
           python -m build --sdist --wheel --outdir dist/ .
 
-      - name: Verify wheel exposes the plugin entry point
+      - name: Verify the plugin entry point loads (install wheel, then check)
         run: |
-          python - <<'PY'
-          import glob, zipfile
-          wheel = glob.glob("dist/*.whl")[0]
-          names = zipfile.ZipFile(wheel).namelist()
-          assert "opik_hermes/__init__.py" in names, "plugin module missing from wheel"
-          body = zipfile.ZipFile(wheel).read(
-              next(n for n in names if n.endswith("entry_points.txt"))
-          ).decode()
-          assert "hermes_agent.plugins" in body and "opik_hermes:register" in body, (
-              "hermes_agent.plugins entry point missing"
-          )
-          print("OK:", wheel)
-          PY
+          pip install dist/*.whl
+          python e2e/assert_entrypoint.py
 
       # --- Decide target -----------------------------------------------------
       # release         -> pypi
