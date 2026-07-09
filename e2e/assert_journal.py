@@ -41,25 +41,62 @@ def _flatten_items(payload):
 
 def main() -> None:
     rows = _load()
-    traces, spans = [], []
+    traces, spans, updates = [], [], []
     for r in rows:
+        kind = r.get("kind")
         items = _flatten_items(r.get("payload"))
-        if r.get("kind") == "traces":
+        if kind == "traces":
             traces += items
-        elif r.get("kind") == "spans":
+        elif kind == "spans":
             spans += items
+        elif kind == "update":
+            updates.append(r.get("payload"))
 
-    print(f"journal: {len(rows)} rows | traces={len(traces)} spans={len(spans)}")
+    # Upsert-only lifecycle: the create and the finalize arrive as two SEPARATE
+    # trace-batch rows sharing one id (create carries name/thread/input; finalize
+    # carries output/end_time). Merge by id so the checks below see the coalesced
+    # trace, exactly as real Opik would store it.
+    merged: dict = {}
+    for t in traces:
+        tid = t.get("id")
+        if tid is None:
+            merged.setdefault(id(t), {}).update(t)
+        else:
+            slot = merged.setdefault(tid, {})
+            slot.update({k: v for k, v in t.items() if v is not None})
+    merged_traces = list(merged.values())
+
+    print(
+        f"journal: {len(rows)} rows | trace-batches={len(traces)} "
+        f"merged-traces={len(merged_traces)} spans={len(spans)} updates={len(updates)}"
+    )
 
     errors = []
 
+    # 0. Upsert-only: finalize must NOT go through trace.update() (a PATCH the
+    # mock records as an "update" row). Its presence means the plugin regressed
+    # to the forbidden post-create mutation — the source of the SDK's
+    # "Calling Trace.update() shortly after creation ... may cause data loss"
+    # warning (OPIK-7279).
+    if updates:
+        errors.append(
+            f"{len(updates)} trace.update() PATCH(es) — lifecycle must be "
+            "upsert-only (same-id re-send), never trace.update()/end()"
+        )
+
     # 1. A root trace exists and is named (descriptive or the fallback).
-    if not traces:
+    if not merged_traces:
         errors.append("no traces captured")
     else:
-        names = [t.get("name") for t in traces]
+        names = [t.get("name") for t in merged_traces]
         if not any(n for n in names):
             errors.append(f"trace(s) have no name: {names}")
+        # 1b. The finalize re-send landed: the trace carries output + end_time
+        # (acceptance criteria — the trace still finalizes correctly).
+        if not any(t.get("output") for t in merged_traces):
+            errors.append("no trace carries output (finalize re-send missing)")
+        if not any(t.get("end_time") for t in merged_traces):
+            errors.append("no trace carries end_time (trace not finalized)")
 
     # 2. At least one LLM span and one tool span, all with name+type (no NA).
     llm = [s for s in spans if s.get("type") == "llm"]
@@ -83,7 +120,8 @@ def main() -> None:
         sys.exit(1)
 
     print("\n=== E2E PASSED ===")
-    print(f"  trace: {traces[0].get('name')!r}")
+    named = next((t.get("name") for t in merged_traces if t.get("name")), None)
+    print(f"  trace: {named!r} (finalized via upsert, no trace.update PATCH)")
     print(f"  llm spans: {len(llm)} | tool spans: {len(tool)} | NA: 0")
 
 

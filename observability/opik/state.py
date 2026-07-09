@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from .client import get_client
 from .config import debug
 
 # Hard cap on live trace state. Each turn keys the store by a unique turn_id,
@@ -126,15 +127,23 @@ def evict_stale_locked() -> None:
     entry. Bounds the leak from turns that never reach ``finish_trace``
     (interrupted / tool-only final step / empty final content), whose unique
     per-turn key would otherwise linger forever. The evicted entry's trace is
-    ended so it is not left dangling on the Opik side.
+    finalized via an upsert re-send (same id + end_time) so it is not left
+    dangling on the Opik side — never trace.end(), which is the forbidden
+    post-create-mutation that trips the batching "may cause data loss" warning.
     """
     over = len(store) - (MAX_TRACE_STATE - 1)
     if over <= 0:
         return
+    client = get_client()
     stale = sorted(store.items(), key=lambda kv: kv[1].last_updated_at)[:over]
     for key, state in stale:
         store.pop(key, None)
+        if client is None:
+            continue
         try:
-            state.trace.end()
+            client.trace(
+                id=state.trace.id,
+                end_time=datetime.datetime.now(datetime.timezone.utc),
+            )
         except Exception as exc:  # pragma: no cover - fail-open
             debug(f"evict stale trace failed: {exc}")

@@ -8,6 +8,7 @@ motivate it — live in one place.
 
 from __future__ import annotations
 
+import datetime
 from typing import Any
 
 from .client import get_client
@@ -51,7 +52,7 @@ def start_root_trace(
     )
     # NOTE: the caller flushes this create (via flush_trace_create) AFTER
     # releasing the state lock. name/thread_id/input are set only at creation, so
-    # the create must not coalesce with the turn's later update()+end() in one
+    # the create must not coalesce with the turn's later finalize re-send in one
     # batch window (a fast turn) or the trace lands NA (name=None/thread=None/
     # input=null) — the trace-level twin of the span NA-bug. flush() blocks on
     # the network, so it is deliberately kept out of the lock.
@@ -97,14 +98,21 @@ def finish_trace(task_key: str, *, output: Any = None) -> None:
         # for calls that never received a post (interrupted turn). They have no
         # span yet — an in-flight call with no response isn't a meaningful span,
         # so we simply drop them rather than emit a partial span.
+        #
+        # Upsert-only finalize: re-send the SAME trace id with the finished
+        # payload (output + end_time) instead of trace.update()/trace.end(). The
+        # SDK's batching layer coalesces this with the create into one final row.
+        # An update() shortly after create trips the "may cause data loss"
+        # warning; the upsert is the mandated pattern and avoids it. name/
+        # thread_id/input were flushed with the create, so they are not re-sent.
         final_output = merge_trace_output(output, state)
-        if final_output is not None:
-            state.trace.update(
-                output=final_output
-                if isinstance(final_output, dict)
-                else {"content": final_output}
-            )
-        state.trace.end()
+        client.trace(
+            id=state.trace.id,
+            output=final_output
+            if final_output is None or isinstance(final_output, dict)
+            else {"content": final_output},
+            end_time=datetime.datetime.now(datetime.timezone.utc),
+        )
     except Exception as exc:  # pragma: no cover - fail-open
         debug(f"finish trace failed: {exc}")
     finally:

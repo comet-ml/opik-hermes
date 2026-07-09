@@ -65,7 +65,12 @@ class FakeTrace:
         self._events = events
         self.id = trace_id
         self.create_kwargs = kwargs
-        self.ended = False
+        # A finalize re-send (upsert: same id, output+end_time) merges here.
+        # `finalized` flips when the finish/evict re-send arrives, replacing the
+        # old .end() bool. `updates` collects each finalize re-send's kwargs so
+        # tests can assert the finished payload without a forbidden trace.update.
+        self.finalized = False
+        self.finalize_kwargs: dict = {}
         self.updates: list[dict] = []
         self.spans: list[FakeSpan] = []
 
@@ -75,17 +80,29 @@ class FakeTrace:
         self.spans.append(s)
         return s
 
-    def update(self, **kwargs: Any) -> None:
+    def upsert(self, **kwargs: Any) -> None:
+        """Record a same-id re-send from client.trace(id=...) as a finalize."""
+        self.finalized = True
+        self.finalize_kwargs.update(kwargs)
         self.updates.append(kwargs)
-        self._events.append(("trace.update", sorted(kwargs)))
+        self._events.append(("trace.upsert", sorted(kwargs)))
 
-    def end(self, **kwargs: Any) -> None:
-        self.ended = True
-        self._events.append(("trace.end",))
+    # Kept only so tests can prove the plugin NO LONGER calls these. The
+    # upsert-only lifecycle must never touch trace.update()/trace.end().
+    def update(self, **kwargs: Any) -> None:  # pragma: no cover - must not be called
+        raise AssertionError("trace.update() is forbidden; use an upsert re-send")
+
+    def end(self, **kwargs: Any) -> None:  # pragma: no cover - must not be called
+        raise AssertionError("trace.end() is forbidden; use an upsert re-send")
 
 
 class FakeOpik:
-    """Minimal stand-in for opik.Opik that records the lifecycle."""
+    """Minimal stand-in for opik.Opik that records the lifecycle.
+
+    ``trace()`` models real Opik's upsert coalescing: a call carrying an ``id``
+    that matches an existing trace merges into it (a finalize re-send) instead
+    of minting a new row. A call with no ``id`` (or an unknown one) is a create.
+    """
 
     def __init__(self, **_: Any):
         self.events: list = []
@@ -93,9 +110,16 @@ class FakeOpik:
         self.flushed = 0
 
     def trace(self, **kwargs: Any) -> FakeTrace:
-        tid = f"trace-{len(self.traces) + 1}"
+        tid = kwargs.get("id")
+        if tid is not None:
+            existing = next((t for t in self.traces if t.id == tid), None)
+            if existing is not None:
+                self.events.append(("client.trace", kwargs.get("name")))
+                existing.upsert(**kwargs)
+                return existing
+        new_id = tid or f"trace-{len(self.traces) + 1}"
         self.events.append(("client.trace", kwargs.get("name")))
-        t = FakeTrace(self.events, tid, kwargs)
+        t = FakeTrace(self.events, new_id, kwargs)
         self.traces.append(t)
         return t
 
