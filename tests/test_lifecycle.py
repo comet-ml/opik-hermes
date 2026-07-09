@@ -141,6 +141,28 @@ def test_post_llm_call_finalizes_and_flushes_trace(plugin):
     )
 
 
+def test_finalize_resend_replays_full_create_payload(plugin):
+    # Regression (OPIK-7279 first attempt): the finalize upsert must replay the
+    # FULL create payload (name/thread_id/input/start_time), not just
+    # output+end_time. An upsert is a whole CreateTraceMessage — a partial
+    # re-send sends the omitted fields as null and the backend's last-write-wins
+    # merge clobbers the create, landing an NA trace (name=None/thread_id=None).
+    # Verified against real Opik: a partial re-send nulled name+thread_id.
+    _run_turn_with_tool(plugin, finalize=True)
+    fk = plugin._fake.traces[0].finalize_kwargs
+    assert fk.get("name"), "finalize re-send must carry name (else NA trace)"
+    assert fk.get("thread_id") == "s", "finalize re-send must carry thread_id"
+    assert fk.get("input") is not None, "finalize re-send must carry input"
+    assert fk.get("start_time") is not None, (
+        "finalize re-send must carry the create's start_time, not a fresh now()"
+    )
+    # And it must be the SAME start_time the trace was created with.
+    ck = plugin._fake.traces[0].create_kwargs
+    assert fk.get("start_time") == ck.get("start_time"), (
+        "finalize start_time must match the create's, not drift to now()"
+    )
+
+
 def test_finalize_is_upsert_not_update_or_end(plugin):
     # Upsert-only: finalize must be a same-id client.trace(...) re-send, never
     # trace.update()/trace.end() (FakeTrace raises on those). The re-send targets

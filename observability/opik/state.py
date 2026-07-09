@@ -70,6 +70,14 @@ class PendingGeneration:
 class TraceState:
     trace: Any
     session_id: str = ""
+    # The exact kwargs the trace was CREATED with (name, project_name,
+    # thread_id, input, metadata, tags, start_time). The finalize/eviction
+    # re-send replays them verbatim + output/end_time: an upsert via
+    # client.trace(id=...) is a full CreateTraceMessage, so any field omitted
+    # goes as null and the backend's last-write-wins merge would clobber the
+    # create (name/thread_id -> NA trace). Re-sending the full payload keeps
+    # them. See lifecycle.finish_trace.
+    create_kwargs: Dict[str, Any] = field(default_factory=dict)
     generations: Dict[str, PendingGeneration] = field(default_factory=dict)
     tools: Dict[str, PendingTool] = field(default_factory=dict)
     pending_tools_by_name: Dict[str, list] = field(default_factory=dict)
@@ -141,9 +149,14 @@ def evict_stale_locked() -> None:
         if client is None:
             continue
         try:
+            # Replay the full create payload + end_time (not a bare id+end_time):
+            # an upsert is a whole CreateTraceMessage, so omitting name/thread_id
+            # sends them as null and clobbers the create -> NA trace. See
+            # TraceState.create_kwargs and lifecycle.finish_trace.
             client.trace(
                 id=state.trace.id,
                 end_time=datetime.datetime.now(datetime.timezone.utc),
+                **state.create_kwargs,
             )
         except Exception as exc:  # pragma: no cover - fail-open
             debug(f"evict stale trace failed: {exc}")

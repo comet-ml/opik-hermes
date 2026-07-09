@@ -48,4 +48,8 @@ def test_lru_eviction_bounds_state_and_finalizes_evicted_trace(plugin):
     finalized = [t for t in plugin._fake.traces if t.finalized]
     assert len(finalized) >= 5
     assert all(t.finalize_kwargs.get("end_time") is not None for t in finalized)
+    # The eviction re-send replays the full create payload (name/thread_id), so
+    # the evicted trace isn't clobbered to an NA trace — same fix as finish.
+    assert all(t.finalize_kwargs.get("name") for t in finalized)
+    assert all(t.finalize_kwargs.get("thread_id") == "s" for t in finalized)
     assert not any(e[0] in ("trace.update", "trace.end") for e in plugin._fake.events)

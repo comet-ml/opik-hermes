@@ -53,17 +53,16 @@ def main() -> None:
             updates.append(r.get("payload"))
 
     # Upsert-only lifecycle: the create and the finalize arrive as two SEPARATE
-    # trace-batch rows sharing one id (create carries name/thread/input; finalize
-    # carries output/end_time). Merge by id so the checks below see the coalesced
-    # trace, exactly as real Opik would store it.
+    # trace-batch rows sharing one id. Merge by id, mimicking real Opik's
+    # last-write-wins — a key present in a later row overwrites earlier, INCLUDING
+    # nulls. This reproduces the OPIK-7279 first-attempt NA-trace bug: a finalize
+    # re-send that omits name/thread_id sends them as null and clobbers the
+    # create. The finalize must therefore replay the full create payload.
     merged: dict = {}
     for t in traces:
         tid = t.get("id")
-        if tid is None:
-            merged.setdefault(id(t), {}).update(t)
-        else:
-            slot = merged.setdefault(tid, {})
-            slot.update({k: v for k, v in t.items() if v is not None})
+        key = tid if tid is not None else id(t)
+        merged.setdefault(key, {}).update(t)
     merged_traces = list(merged.values())
 
     print(
@@ -84,15 +83,22 @@ def main() -> None:
             "upsert-only (same-id re-send), never trace.update()/end()"
         )
 
-    # 1. A root trace exists and is named (descriptive or the fallback).
+    # 1. A root trace exists and, after the finalize re-send merges in, still
+    # carries name + thread_id (not clobbered to an NA trace) AND the finished
+    # payload (output + end_time). This is the full OPIK-7279 acceptance shape.
     if not merged_traces:
         errors.append("no traces captured")
     else:
-        names = [t.get("name") for t in merged_traces]
-        if not any(n for n in names):
-            errors.append(f"trace(s) have no name: {names}")
-        # 1b. The finalize re-send landed: the trace carries output + end_time
-        # (acceptance criteria — the trace still finalizes correctly).
+        if not any(t.get("name") for t in merged_traces):
+            errors.append(
+                "no trace has a name after merge (NA trace — finalize re-send "
+                "clobbered it; it must replay the full create payload)"
+            )
+        if not any(t.get("thread_id") for t in merged_traces):
+            errors.append(
+                "no trace has a thread_id after merge (session grouping lost — "
+                "finalize re-send must replay thread_id)"
+            )
         if not any(t.get("output") for t in merged_traces):
             errors.append("no trace carries output (finalize re-send missing)")
         if not any(t.get("end_time") for t in merged_traces):
