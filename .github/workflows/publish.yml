@@ -139,6 +139,10 @@ jobs:
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
+          # verbose surfaces twine's full error body (e.g. the reason behind a
+          # bare "400 Bad Request") — GitHub debug logging does NOT, since the
+          # detail comes from twine's own --verbose, not the runner.
+          verbose: true
 
       - name: Publish to PyPI
         if: steps.target.outputs.to == 'pypi'
@@ -146,3 +150,4 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
+          verbose: true
