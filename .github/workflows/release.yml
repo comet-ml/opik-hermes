@@ -1,0 +1,229 @@
+name: Release
+
+run-name: "Release opik-hermes by @${{ github.actor }}"
+
+# One-click release. Manual dispatch only. A HUMAN chooses the bump —
+# patch/minor/major (default patch) — because whether a change is breaking
+# (major) vs additive (minor) vs a fix (patch) is a judgment call a commit
+# prefix can't be trusted to make. The version number is computed by applying
+# that bump to the LAST GIT TAG (the record of what was actually released),
+# not to pyproject.toml (a file any PR can edit). release-drafter is used only
+# to generate the changelog notes for the GitHub Release — NOT to decide the
+# number.
+#
+# Flow (once dispatched):
+#   1. Compute next version = last git tag + chosen bump.
+#   2. Guard: pyproject.toml must match the last tag (no drift), and the new
+#      tag must not already exist.
+#   3. Write the version into pyproject.toml and commit to main.
+#   4. Tag that commit vX.Y.Z and push.
+#   5. Call publish.yml (builds the tagged source, uploads to PyPI).
+#   6. Publish the GitHub Release (release-drafter notes) at the tag.
+#
+# publish.yml stays independently usable: workflow_dispatch for a TestPyPI
+# dry-run, and release:published as a manual fallback.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Semver part to bump (a human decides breaking vs additive vs fix)"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: "Compute the version and stop (no tag/commit/publish)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.compute.outputs.version }}      # X.Y.Z (no leading v)
+      tag: ${{ steps.compute.outputs.tag }}              # vX.Y.Z
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0        # need full tag history
+
+      - name: Compute next version from last tag + chosen bump
+        id: compute
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin >/dev/null 2>&1 || true
+
+          # Latest release tag by semver (vX.Y.Z only — ignore pre-release/junk).
+          LAST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          if [ -z "$LAST_TAG" ]; then
+            echo "::error title=Release::No vX.Y.Z tag found to bump from."
+            exit 1
+          fi
+          LAST="${LAST_TAG#v}"
+          echo "last tag: $LAST_TAG"
+
+          # Drift guard: pyproject.toml must equal the last released tag, i.e.
+          # we're releasing from a clean post-release state. If someone hand-
+          # bumped pyproject in a PR, or a prior release half-completed, these
+          # diverge — stop and make a human look rather than compute off a lie.
+          PY_VER=$(./scripts/pyproject-version.sh)
+          if [ "$PY_VER" != "$LAST" ]; then
+            echo "::error title=Release::pyproject.toml ($PY_VER) != last tag ($LAST). They must match before a release (clean post-release state). Reconcile them, then retry."
+            exit 1
+          fi
+
+          IFS='.' read -r MA MI PA <<< "$LAST"
+          case "$BUMP" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            patch) PA=$((PA+1)) ;;
+            *) echo "::error::unknown bump '$BUMP'"; exit 1 ;;
+          esac
+          VER="$MA.$MI.$PA"
+          echo "bump=$BUMP -> next version $VER"
+
+          if git rev-parse -q --verify "refs/tags/v$VER" >/dev/null || \
+             git ls-remote --tags origin "v$VER" | grep -q "refs/tags/v$VER"; then
+            echo "::error title=Release::Tag v$VER already exists — pick a different bump or reconcile state."
+            exit 1
+          fi
+
+          echo "version=$VER" | tee -a "$GITHUB_OUTPUT"
+          echo "tag=v$VER"    | tee -a "$GITHUB_OUTPUT"
+
+  bump-tag:
+    needs: resolve-version
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write        # commit the bump + push the tag to main
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Write version into pyproject.toml
+        env:
+          VER: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          python - "$VER" <<'PY'
+          import re, sys
+          ver = sys.argv[1]
+          p = "pyproject.toml"
+          s = open(p, encoding="utf-8").read()
+          # Only the [project] version line: `version = "X.Y.Z"` at column 0.
+          new, n = re.subn(r'(?m)^version\s*=\s*"[^"]*"', f'version = "{ver}"', s, count=1)
+          if n != 1:
+              sys.exit(f"expected exactly one top-level version line, replaced {n}")
+          open(p, "w", encoding="utf-8").write(new)
+          print(f"pyproject.toml version -> {ver}")
+          PY
+
+      - name: Commit bump + create and push tag
+        env:
+          VER: ${{ needs.resolve-version.outputs.version }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          git config --local user.email "github-actions@comet.com"
+          git config --local user.name "github-actions"
+          if git diff --quiet pyproject.toml; then
+            echo "::error title=Release::pyproject.toml unchanged after writing $VER — expected a bump from the last tag, aborting."
+            exit 1
+          fi
+          git add pyproject.toml
+          git commit -m "chore(release): $VER"
+          git tag "$TAG"
+          # --no-verify: no local hooks in CI; push commit then tag.
+          git push --no-verify origin HEAD:main
+          git push --no-verify origin "$TAG"
+
+  publish:
+    needs:
+      - resolve-version
+      - bump-tag
+    if: ${{ !inputs.dry_run }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish.yml
+    secrets: inherit
+    with:
+      target: pypi
+      ref: refs/tags/${{ needs.resolve-version.outputs.tag }}
+
+  publish-github-release:
+    needs:
+      - resolve-version
+      - bump-tag
+      - publish
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write        # release-drafter reads/updates the draft; we publish it
+      pull-requests: read
+    steps:
+      # release-drafter maintains the single draft release; we grab its id to
+      # retarget + publish at OUR computed tag. We do NOT reuse its rendered
+      # body — the drafter renders against its own resolved version, so the body
+      # is regenerated against $TAG below. Run it here (after the tag exists) so
+      # the published release points at a real tag.
+      - name: Draft release notes
+        id: draft
+        uses: release-drafter/release-drafter@v6.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the GitHub Release at our tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+          VER: ${{ needs.resolve-version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Regenerate the release body against OUR tag. The drafter renders its
+          # body (incl. the "Full Changelog" compare link) using ITS resolved
+          # version, which differs from the human-chosen bump — so reusing the
+          # drafter's body would ship a compare link for the wrong tag. Ask
+          # GitHub to generate notes for exactly $TAG (its compare link then
+          # points at $TAG) and use that as the published body.
+          #
+          # If regeneration FAILS or returns empty, keep the drafter's existing
+          # body — never overwrite it with "". A stale compare link is a minor
+          # cosmetic issue; publishing a release with no notes at all is not.
+          BODY="$(gh api -X POST "repos/$REPO/releases/generate-notes" \
+            -f tag_name="$TAG" --jq '.body' 2>/dev/null)" || BODY=""
+
+          # Retarget the draft to OUR tag/name and flip it live. Only override
+          # the body when regeneration produced non-empty notes; otherwise leave
+          # the drafter's body untouched (omit -f body).
+          if [ -n "${RELEASE_ID}" ] && [ "${RELEASE_ID}" != "null" ]; then
+            if [ -n "$BODY" ]; then
+              gh api -X PATCH "repos/$REPO/releases/${RELEASE_ID}" \
+                -f tag_name="$TAG" -f name="$TAG" -f body="$BODY" -F draft=false \
+                --jq '.html_url'
+            else
+              echo "::warning title=Release::generate-notes returned no body; keeping the drafter's body (compare link may reference the drafter's version)."
+              gh api -X PATCH "repos/$REPO/releases/${RELEASE_ID}" \
+                -f tag_name="$TAG" -f name="$TAG" -F draft=false \
+                --jq '.html_url'
+            fi
+          else
+            # No draft (e.g. drafter produced none) — create a plain release at
+            # the tag so the release still lands. Notes auto-generated by GitHub.
+            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          fi
