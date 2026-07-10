@@ -154,21 +154,22 @@ def serialize_one_message(message: Any) -> Optional[dict[str, Any]]:
     if role is None and "content" not in message:
         # Unknown item shape — keep its type so it isn't a silent null.
         return {"role": None, "content": {"unrecognized_item": safe_value(message)}}
-    item: dict[str, Any] = {
-        "role": role,
-        "content": safe_value(
-            message.get("content"), parse_json_strings=(role == "tool")
-        ),
-    }
+    content = safe_value(message.get("content"), parse_json_strings=(role == "tool"))
+    tool_calls = message.get("tool_calls")
+
+    # An assistant turn that produced neither text nor tool calls has no signal
+    # — it renders as an empty message bubble. Drop it rather than emit noise.
+    if role == "assistant" and not content and not tool_calls:
+        return None
+
+    item: dict[str, Any] = {"role": role, "content": content}
     if role == "tool":
         if message.get("tool_call_id"):
             item["tool_call_id"] = message.get("tool_call_id")
         if message.get("name"):
             item["name"] = safe_value(message.get("name"))
-    if message.get("tool_calls"):
-        item["tool_calls"] = safe_value(
-            message.get("tool_calls"), parse_json_strings=True
-        )
+    if tool_calls:
+        item["tool_calls"] = safe_value(tool_calls, parse_json_strings=True)
     return item
 
 

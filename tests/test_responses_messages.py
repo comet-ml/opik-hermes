@@ -114,3 +114,28 @@ def test_unrecognized_item_kept_not_nulled(plugin):
     out = _ser(plugin, [{"type": "mystery", "blah": 1}])
     assert out[0]["role"] is None
     assert "unrecognized_item" in out[0]["content"]
+
+
+def test_empty_assistant_message_dropped(plugin):
+    # A tool-call-only assistant turn arrives with content "" and its tool calls
+    # emitted as separate items — the bare {assistant, ""} record is pure noise.
+    out = _ser(plugin, [{"role": "assistant", "content": ""}])
+    assert out == []
+
+
+def test_assistant_with_tool_calls_kept_despite_empty_content(plugin):
+    msg = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "c1", "function": {"name": "terminal"}}],
+    }
+    out = _ser(plugin, [msg])
+    assert len(out) == 1
+    assert out[0]["role"] == "assistant"
+    assert out[0]["tool_calls"]
+
+
+def test_empty_user_message_kept(plugin):
+    # Only assistant no-signal turns are dropped; other roles pass through.
+    out = _ser(plugin, [{"role": "user", "content": ""}])
+    assert out == [{"role": "user", "content": ""}]
