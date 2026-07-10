@@ -2,27 +2,36 @@ name: Release
 
 run-name: "Release opik-hermes by @${{ github.actor }}"
 
-# One-click release. Manual dispatch only. The version is NOT chosen here — it
-# comes from release-drafter's resolved_version, which is computed from the PRs
-# merged since the last release (feat: -> minor, else patch; overridable by a
-# major/minor/patch label on any PR in the release; see .github/release-drafter.yml).
-# So to cut a minor, merge a feat: PR (or label a PR `minor`) — no dropdown here.
+# One-click release. Manual dispatch only. A HUMAN chooses the bump —
+# patch/minor/major (default patch) — because whether a change is breaking
+# (major) vs additive (minor) vs a fix (patch) is a judgment call a commit
+# prefix can't be trusted to make. The version number is computed by applying
+# that bump to the LAST GIT TAG (the record of what was actually released),
+# not to pyproject.toml (a file any PR can edit). release-drafter is used only
+# to generate the changelog notes for the GitHub Release — NOT to decide the
+# number.
 #
-# Flow (all automatic once dispatched):
-#   1. Resolve the next version from the release-drafter draft.
-#   2. Refuse if that tag already exists (nothing to re-release).
+# Flow (once dispatched):
+#   1. Compute next version = last git tag + chosen bump.
+#   2. Guard: pyproject.toml must match the last tag (no drift), and the new
+#      tag must not already exist.
 #   3. Write the version into pyproject.toml and commit to main.
 #   4. Tag that commit vX.Y.Z and push.
 #   5. Call publish.yml (builds the tagged source, uploads to PyPI).
-#   6. Publish the drafted GitHub Release at the tag.
+#   6. Publish the GitHub Release (release-drafter notes) at the tag.
 #
 # publish.yml stays independently usable: workflow_dispatch for a TestPyPI
 # dry-run, and release:published as a manual fallback.
 on:
   workflow_dispatch:
     inputs:
+      bump:
+        description: "Semver part to bump (a human decides breaking vs additive vs fix)"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
       dry_run:
-        description: "Resolve the version and stop (no tag/commit/publish)"
+        description: "Compute the version and stop (no tag/commit/publish)"
         type: boolean
         default: false
 
@@ -33,41 +42,60 @@ jobs:
   resolve-version:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: write        # release-drafter reads/updates the draft release
-      pull-requests: read
     outputs:
-      version: ${{ steps.clean.outputs.version }}      # X.Y.Z (no leading v)
-      tag: ${{ steps.clean.outputs.tag }}              # vX.Y.Z
-      release_id: ${{ steps.draft.outputs.id }}        # draft release id to publish
+      version: ${{ steps.compute.outputs.version }}      # X.Y.Z (no leading v)
+      tag: ${{ steps.compute.outputs.tag }}              # vX.Y.Z
     steps:
-      - name: Resolve next version from release-drafter
-        id: draft
-        uses: release-drafter/release-drafter@v6.1.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0        # need full tag history
 
-      - name: Normalize version + tag
-        id: clean
+      - name: Compute next version from last tag + chosen bump
+        id: compute
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
-          RAW="${{ steps.draft.outputs.resolved_version }}"
-          if [ -z "$RAW" ]; then
-            echo "::error title=Release::release-drafter returned no resolved_version. Is there a draft release with merged PRs since the last release?"
+          set -euo pipefail
+          git fetch --tags --force origin >/dev/null 2>&1 || true
+
+          # Latest release tag by semver (vX.Y.Z only — ignore pre-release/junk).
+          LAST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          if [ -z "$LAST_TAG" ]; then
+            echo "::error title=Release::No vX.Y.Z tag found to bump from."
             exit 1
           fi
-          VER="${RAW#v}"
+          LAST="${LAST_TAG#v}"
+          echo "last tag: $LAST_TAG"
+
+          # Drift guard: pyproject.toml must equal the last released tag, i.e.
+          # we're releasing from a clean post-release state. If someone hand-
+          # bumped pyproject in a PR, or a prior release half-completed, these
+          # diverge — stop and make a human look rather than compute off a lie.
+          PY_VER=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$PY_VER" != "$LAST" ]; then
+            echo "::error title=Release::pyproject.toml ($PY_VER) != last tag ($LAST). They must match before a release (clean post-release state). Reconcile them, then retry."
+            exit 1
+          fi
+
+          IFS='.' read -r MA MI PA <<< "$LAST"
+          case "$BUMP" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            patch) PA=$((PA+1)) ;;
+            *) echo "::error::unknown bump '$BUMP'"; exit 1 ;;
+          esac
+          VER="$MA.$MI.$PA"
+          echo "bump=$BUMP -> next version $VER"
+
+          if git rev-parse -q --verify "refs/tags/v$VER" >/dev/null || \
+             git ls-remote --tags origin "v$VER" | grep -q "refs/tags/v$VER"; then
+            echo "::error title=Release::Tag v$VER already exists — pick a different bump or reconcile state."
+            exit 1
+          fi
+
           echo "version=$VER" | tee -a "$GITHUB_OUTPUT"
           echo "tag=v$VER"    | tee -a "$GITHUB_OUTPUT"
-
-      - name: Refuse if tag already exists
-        env:
-          TAG: ${{ steps.clean.outputs.tag }}
-        run: |
-          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
-            echo "::error title=Release::Tag $TAG already exists on origin — nothing to re-release. Merge new PRs (feat:/fix:) to advance the version."
-            exit 1
-          fi
-          echo "OK: $TAG does not exist yet."
 
   bump-tag:
     needs: resolve-version
@@ -111,7 +139,7 @@ jobs:
           git config --local user.email "github-actions@comet.com"
           git config --local user.name "github-actions"
           if git diff --quiet pyproject.toml; then
-            echo "::error title=Release::pyproject.toml already at $VER but tag $TAG didn't exist — inconsistent state, aborting."
+            echo "::error title=Release::pyproject.toml unchanged after writing $VER — expected a bump from the last tag, aborting."
             exit 1
           fi
           git add pyproject.toml
@@ -144,15 +172,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write        # flip the draft release to published
+      contents: write        # release-drafter reads/updates the draft; we publish it
+      pull-requests: read
     steps:
-      - name: Publish the drafted GitHub Release at the tag
+      # release-drafter generates the changelog NOTES (not the version — that's
+      # ours). It maintains a single draft release; we grab its id + body, then
+      # publish it at OUR computed tag. Run it here (after the tag exists) so the
+      # published release points at a real tag.
+      - name: Draft release notes
+        id: draft
+        uses: release-drafter/release-drafter@v6.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the GitHub Release at our tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_ID: ${{ needs.resolve-version.outputs.release_id }}
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
           TAG: ${{ needs.resolve-version.outputs.tag }}
+          VER: ${{ needs.resolve-version.outputs.version }}
         run: |
-          # The draft was created against the tag name; now that the tag exists
-          # and PyPI has the artifact, flip it to published (not a draft).
-          gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
-            -f tag_name="$TAG" -F draft=false --jq '.html_url'
+          set -euo pipefail
+          # Retarget the draft to OUR tag/name (the drafter's own resolved
+          # version may differ from the human-chosen bump) and flip it live.
+          if [ -n "${RELEASE_ID}" ] && [ "${RELEASE_ID}" != "null" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
+              -f tag_name="$TAG" -f name="$TAG" -F draft=false --jq '.html_url'
+          else
+            # No draft (e.g. drafter produced none) — create a plain release at
+            # the tag so the release still lands. Notes auto-generated by GitHub.
+            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          fi
