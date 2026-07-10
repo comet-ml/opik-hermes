@@ -1,0 +1,158 @@
+name: Release
+
+run-name: "Release opik-hermes by @${{ github.actor }}"
+
+# One-click release. Manual dispatch only. The version is NOT chosen here — it
+# comes from release-drafter's resolved_version, which is computed from the PRs
+# merged since the last release (feat: -> minor, else patch; overridable by a
+# major/minor/patch label on any PR in the release; see .github/release-drafter.yml).
+# So to cut a minor, merge a feat: PR (or label a PR `minor`) — no dropdown here.
+#
+# Flow (all automatic once dispatched):
+#   1. Resolve the next version from the release-drafter draft.
+#   2. Refuse if that tag already exists (nothing to re-release).
+#   3. Write the version into pyproject.toml and commit to main.
+#   4. Tag that commit vX.Y.Z and push.
+#   5. Call publish.yml (builds the tagged source, uploads to PyPI).
+#   6. Publish the drafted GitHub Release at the tag.
+#
+# publish.yml stays independently usable: workflow_dispatch for a TestPyPI
+# dry-run, and release:published as a manual fallback.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Resolve the version and stop (no tag/commit/publish)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write        # release-drafter reads/updates the draft release
+      pull-requests: read
+    outputs:
+      version: ${{ steps.clean.outputs.version }}      # X.Y.Z (no leading v)
+      tag: ${{ steps.clean.outputs.tag }}              # vX.Y.Z
+      release_id: ${{ steps.draft.outputs.id }}        # draft release id to publish
+    steps:
+      - name: Resolve next version from release-drafter
+        id: draft
+        uses: release-drafter/release-drafter@v6.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize version + tag
+        id: clean
+        run: |
+          RAW="${{ steps.draft.outputs.resolved_version }}"
+          if [ -z "$RAW" ]; then
+            echo "::error title=Release::release-drafter returned no resolved_version. Is there a draft release with merged PRs since the last release?"
+            exit 1
+          fi
+          VER="${RAW#v}"
+          echo "version=$VER" | tee -a "$GITHUB_OUTPUT"
+          echo "tag=v$VER"    | tee -a "$GITHUB_OUTPUT"
+
+      - name: Refuse if tag already exists
+        env:
+          TAG: ${{ steps.clean.outputs.tag }}
+        run: |
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "::error title=Release::Tag $TAG already exists on origin — nothing to re-release. Merge new PRs (feat:/fix:) to advance the version."
+            exit 1
+          fi
+          echo "OK: $TAG does not exist yet."
+
+  bump-tag:
+    needs: resolve-version
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write        # commit the bump + push the tag to main
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Write version into pyproject.toml
+        env:
+          VER: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          python - "$VER" <<'PY'
+          import re, sys
+          ver = sys.argv[1]
+          p = "pyproject.toml"
+          s = open(p, encoding="utf-8").read()
+          # Only the [project] version line: `version = "X.Y.Z"` at column 0.
+          new, n = re.subn(r'(?m)^version\s*=\s*"[^"]*"', f'version = "{ver}"', s, count=1)
+          if n != 1:
+              sys.exit(f"expected exactly one top-level version line, replaced {n}")
+          open(p, "w", encoding="utf-8").write(new)
+          print(f"pyproject.toml version -> {ver}")
+          PY
+
+      - name: Commit bump + create and push tag
+        env:
+          VER: ${{ needs.resolve-version.outputs.version }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          git config --local user.email "github-actions@comet.com"
+          git config --local user.name "github-actions"
+          if git diff --quiet pyproject.toml; then
+            echo "::error title=Release::pyproject.toml already at $VER but tag $TAG didn't exist — inconsistent state, aborting."
+            exit 1
+          fi
+          git add pyproject.toml
+          git commit -m "chore(release): $VER"
+          git tag "$TAG"
+          # --no-verify: no local hooks in CI; push commit then tag.
+          git push --no-verify origin HEAD:main
+          git push --no-verify origin "$TAG"
+
+  publish:
+    needs:
+      - resolve-version
+      - bump-tag
+    if: ${{ !inputs.dry_run }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish.yml
+    secrets: inherit
+    with:
+      target: pypi
+      ref: refs/tags/${{ needs.resolve-version.outputs.tag }}
+
+  publish-github-release:
+    needs:
+      - resolve-version
+      - bump-tag
+      - publish
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write        # flip the draft release to published
+    steps:
+      - name: Publish the drafted GitHub Release at the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.resolve-version.outputs.release_id }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          # The draft was created against the tag name; now that the tag exists
+          # and PyPI has the artifact, flip it to published (not a draft).
+          gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
+            -f tag_name="$TAG" -F draft=false --jq '.html_url'
