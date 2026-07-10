@@ -20,11 +20,13 @@ from .lifecycle import finish_trace, flush_trace_create, start_root_trace
 from .providers import to_opik_provider
 from .sanitize import (
     as_input_dict,
+    assistant_output,
     coerce_request_messages,
     maybe_parse_json_string,
     normalize_payload,
     safe_value,
     serialize_assistant_message,
+    serialize_tool_calls,
     serialize_messages,
 )
 from .state import (
@@ -218,27 +220,27 @@ def on_post_llm_call(
 
     if assistant_message is not None:
         output = serialize_assistant_message(assistant_message)
+        tool_calls = serialize_tool_calls(
+            getattr(assistant_message, "tool_calls", None)
+        )
     elif assistant_response is not None:
-        output = {
-            "content": safe_value(assistant_response),
-            "reasoning": None,
-            "tool_calls": [],
-        }
+        output = assistant_output(content=safe_value(assistant_response))
+        tool_calls = []
     else:
-        output = {
-            "content": f"[{assistant_content_chars} chars]"
+        tool_calls = (
+            [{"id": f"tc_{i}"} for i in range(assistant_tool_call_count)]
+            if assistant_tool_call_count
+            else []
+        )
+        output = assistant_output(
+            content=f"[{assistant_content_chars} chars]"
             if assistant_content_chars
             else None,
-            "reasoning": None,
-            "tool_calls": (
-                [{"id": f"tc_{i}"} for i in range(assistant_tool_call_count)]
-                if assistant_tool_call_count
-                else []
-            ),
-        }
+            tool_calls=tool_calls,
+        )
 
-    if output.get("tool_calls"):
-        state.turn_tool_calls.extend(output["tool_calls"])
+    if tool_calls:
+        state.turn_tool_calls.extend(tool_calls)
 
     # Prefer a real response object that carries .usage; else fall back to the
     # usage summary dict from post_api_request (post_api_request passes

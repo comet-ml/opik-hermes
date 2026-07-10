@@ -31,7 +31,11 @@ from .read_file import (
     normalize_read_file_payload,
     parse_read_file_lines,
 )
-from .tools import serialize_assistant_message, serialize_tool_calls
+from .tools import (
+    assistant_output,
+    serialize_assistant_message,
+    serialize_tool_calls,
+)
 from .values import (
     is_base64_data_uri,
     maybe_parse_json_string,
@@ -59,6 +63,7 @@ __all__ = [
     "serialize_one_message",
     "trace_name_from_messages",
     # tools
+    "assistant_output",
     "serialize_assistant_message",
     "serialize_tool_calls",
     # read_file

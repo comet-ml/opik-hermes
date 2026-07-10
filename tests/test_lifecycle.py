@@ -139,6 +139,32 @@ def test_post_llm_call_finalizes_and_flushes_trace(plugin):
     assert trace.finalize_kwargs.get("end_time") is not None, (
         "finalize re-send must carry end_time"
     )
+    # Trace Output uses the OpenAI chat-completion shape so Opik's pretty
+    # renderer recognizes it (OPIK-7280) — same as the LLM spans.
+    msg = trace.finalize_kwargs["output"]["choices"][-1]["message"]
+    assert msg["content"] == "here are the files"
+
+
+def test_merge_trace_output_content_only_is_choices_shape(plugin):
+    state = plugin.state.TraceState.__new__(plugin.state.TraceState)
+    state.turn_tool_calls = []
+    out = plugin.lifecycle.merge_trace_output({"content": "hello"}, state)
+    assert out["choices"][-1]["message"]["content"] == "hello"
+
+
+def test_merge_trace_output_tool_calls_render_readable_content(plugin):
+    state = plugin.state.TraceState.__new__(plugin.state.TraceState)
+    state.turn_tool_calls = [{"name": "terminal", "arguments": {"command": "42"}}]
+    out = plugin.lifecycle.merge_trace_output(None, state)
+    msg = out["choices"][-1]["message"]
+    assert isinstance(msg["content"], str) and "terminal" in msg["content"]
+    assert msg["tool_calls"][0]["name"] == "terminal"
+
+
+def test_merge_trace_output_none_stays_none(plugin):
+    state = plugin.state.TraceState.__new__(plugin.state.TraceState)
+    state.turn_tool_calls = []
+    assert plugin.lifecycle.merge_trace_output(None, state) is None
 
 
 def test_finalize_resend_replays_full_create_payload(plugin):

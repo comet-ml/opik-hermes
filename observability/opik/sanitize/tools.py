@@ -6,6 +6,7 @@ Extracts a readable, safe representation of an assistant message's tool calls
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .values import safe_value
@@ -32,9 +33,56 @@ def serialize_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
     return serialized
 
 
-def serialize_assistant_message(message: Any) -> dict[str, Any]:
+def tool_call_text(name: Any, arguments: Any) -> str:
+    """Render a single tool call as readable ``name(arguments)`` text."""
+    label = name or "tool"
+    if isinstance(arguments, (dict, list)):
+        rendered = json.dumps(arguments, ensure_ascii=False)
+    elif arguments is None:
+        rendered = ""
+    else:
+        rendered = str(arguments)
+    return f"{label}({rendered})"
+
+
+def _tool_calls_as_text(tool_calls: list[dict[str, Any]]) -> str:
+    lines = [tool_call_text(tc.get("name"), tc.get("arguments")) for tc in tool_calls]
+    return "Tool calls:\n" + "\n".join(f"- {line}" for line in lines)
+
+
+def assistant_output(
+    content: Any,
+    reasoning: Any = None,
+    tool_calls: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Shape the LLM-span output as an OpenAI chat-completion so Opik's pretty
+    renderer (which reads ``choices[-1].message.content``) recognizes it.
+
+    Pretty mode only surfaces non-empty ``content``, so on a tool-call turn with
+    no assistant text we render the tool calls as readable text; the structured
+    ``tool_calls`` stay on the message for the JSON/YAML view.
+    """
+    tool_calls = tool_calls or []
+    pretty_content = content
+    if not pretty_content and tool_calls:
+        pretty_content = _tool_calls_as_text(tool_calls)
     return {
-        "content": safe_value(getattr(message, "content", None)),
-        "reasoning": safe_value(getattr(message, "reasoning", None)),
-        "tool_calls": serialize_tool_calls(getattr(message, "tool_calls", None)),
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": pretty_content,
+                    "reasoning": reasoning,
+                    "tool_calls": tool_calls,
+                }
+            }
+        ]
     }
+
+
+def serialize_assistant_message(message: Any) -> dict[str, Any]:
+    return assistant_output(
+        content=safe_value(getattr(message, "content", None)),
+        reasoning=safe_value(getattr(message, "reasoning", None)),
+        tool_calls=serialize_tool_calls(getattr(message, "tool_calls", None)),
+    )
