@@ -132,9 +132,9 @@ def test_session_end_finalizes_open_traces_and_flushes(plugin):
         session_id="sX",
         turn_id="T1",
     )
-    assert not plugin._fake.traces[0].ended
+    assert not plugin._fake.traces[0].finalized
     plugin.on_session_end(session_id="sX")
-    assert plugin._fake.traces[0].ended
+    assert plugin._fake.traces[0].finalized
     assert plugin._fake.flushed >= 1
 
 
@@ -152,9 +152,9 @@ def test_session_end_finalizes_task_keyed_traces(plugin):
     )
     key = plugin.keys.trace_key("task-42", "sess-y", turn_id="T1")
     assert key.startswith("task:"), "precondition: turn is task-keyed"
-    assert not plugin._fake.traces[0].ended
+    assert not plugin._fake.traces[0].finalized
     plugin.on_session_end(session_id="sess-y")
-    assert plugin._fake.traces[0].ended
+    assert plugin._fake.traces[0].finalized
     assert plugin._fake.flushed >= 1
 
 

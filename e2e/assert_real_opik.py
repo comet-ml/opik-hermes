@@ -58,15 +58,20 @@ def main() -> None:
     # correctly-typed LLM + tool spans with no NA spans.
     errors = []
     # The trace name and thread_id are set only at creation. If the create
-    # message coalesces with the finalize update()/end() in one batch window
-    # (a fast turn), the trace lands with name=None/thread_id=None — an "NA"
-    # trace. The plugin flushes the create to prevent this; assert it held.
+    # message coalesces with the finalize re-send in one batch window (a fast
+    # turn), the trace lands with name=None/thread_id=None — an "NA" trace. The
+    # plugin flushes the create to prevent this; assert it held.
     if not t.get("name"):
         errors.append("trace has no name (NA trace — create/finalize batching race)")
     if not t.get("thread_id"):
         errors.append("trace has no thread_id (session grouping lost to the race)")
     if not t.get("end_time"):
         errors.append("trace not finalized (end_time is null)")
+    # The finalize re-send (upsert: same id + output + end_time) must have
+    # coalesced onto the trace — proves the upsert-only lifecycle landed the
+    # finished payload, not just an open trace (OPIK-7279).
+    if not t.get("output"):
+        errors.append("trace has no output (finalize re-send did not land)")
     if not llm:
         errors.append("no llm spans")
     if not tool:

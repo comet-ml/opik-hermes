@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from .client import get_client
 from .config import debug
 
 # Hard cap on live trace state. Each turn keys the store by a unique turn_id,
@@ -69,6 +70,14 @@ class PendingGeneration:
 class TraceState:
     trace: Any
     session_id: str = ""
+    # The exact kwargs the trace was CREATED with (name, project_name,
+    # thread_id, input, metadata, tags, start_time). The finalize/eviction
+    # re-send replays them verbatim + output/end_time: an upsert via
+    # client.trace(id=...) is a full CreateTraceMessage, so any field omitted
+    # goes as null and the backend's last-write-wins merge would clobber the
+    # create (name/thread_id -> NA trace). Re-sending the full payload keeps
+    # them. See lifecycle.finish_trace.
+    create_kwargs: Dict[str, Any] = field(default_factory=dict)
     generations: Dict[str, PendingGeneration] = field(default_factory=dict)
     tools: Dict[str, PendingTool] = field(default_factory=dict)
     pending_tools_by_name: Dict[str, list] = field(default_factory=dict)
@@ -126,15 +135,28 @@ def evict_stale_locked() -> None:
     entry. Bounds the leak from turns that never reach ``finish_trace``
     (interrupted / tool-only final step / empty final content), whose unique
     per-turn key would otherwise linger forever. The evicted entry's trace is
-    ended so it is not left dangling on the Opik side.
+    finalized via an upsert re-send (same id + end_time) so it is not left
+    dangling on the Opik side — never trace.end(), which is the forbidden
+    post-create-mutation that trips the batching "may cause data loss" warning.
     """
     over = len(store) - (MAX_TRACE_STATE - 1)
     if over <= 0:
         return
+    client = get_client()
     stale = sorted(store.items(), key=lambda kv: kv[1].last_updated_at)[:over]
     for key, state in stale:
         store.pop(key, None)
+        if client is None:
+            continue
         try:
-            state.trace.end()
+            # Replay the full create payload + end_time (not a bare id+end_time):
+            # an upsert is a whole CreateTraceMessage, so omitting name/thread_id
+            # sends them as null and clobbers the create -> NA trace. See
+            # TraceState.create_kwargs and lifecycle.finish_trace.
+            client.trace(
+                id=state.trace.id,
+                end_time=datetime.datetime.now(datetime.timezone.utc),
+                **state.create_kwargs,
+            )
         except Exception as exc:  # pragma: no cover - fail-open
             debug(f"evict stale trace failed: {exc}")
