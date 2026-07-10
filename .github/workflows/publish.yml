@@ -60,7 +60,7 @@ jobs:
       - name: Tag matches pyproject version (release only)
         if: github.event_name == 'release' || startsWith(inputs.ref, 'refs/tags/')
         run: |
-          FILE_VER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          FILE_VER=$(./scripts/pyproject-version.sh)
           REF="${{ inputs.ref || github.ref_name }}"
           TAG_VER="${REF#refs/tags/}"
           TAG_VER="${TAG_VER#v}"
