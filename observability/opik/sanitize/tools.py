@@ -33,18 +33,20 @@ def serialize_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
     return serialized
 
 
+def tool_call_text(name: Any, arguments: Any) -> str:
+    """Render a single tool call as readable ``name(arguments)`` text."""
+    label = name or "tool"
+    if isinstance(arguments, (dict, list)):
+        rendered = json.dumps(arguments, ensure_ascii=False)
+    elif arguments is None:
+        rendered = ""
+    else:
+        rendered = str(arguments)
+    return f"{label}({rendered})"
+
+
 def _tool_calls_as_text(tool_calls: list[dict[str, Any]]) -> str:
-    lines = []
-    for tc in tool_calls:
-        name = tc.get("name") or "tool"
-        arguments = tc.get("arguments")
-        if isinstance(arguments, (dict, list)):
-            rendered = json.dumps(arguments, ensure_ascii=False)
-        elif arguments is None:
-            rendered = ""
-        else:
-            rendered = str(arguments)
-        lines.append(f"{name}({rendered})")
+    lines = [tool_call_text(tc.get("name"), tc.get("arguments")) for tc in tool_calls]
     return "Tool calls:\n" + "\n".join(f"- {line}" for line in lines)
 
 

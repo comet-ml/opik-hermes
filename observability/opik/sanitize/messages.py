@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from .tools import tool_call_text
 from .values import safe_value
 
 _TRACE_NAME_MAX_CHARS = 60
@@ -24,17 +25,6 @@ def _json_str(value: Any) -> str:
     if value is None:
         return "{}"
     return json.dumps(value, ensure_ascii=False)
-
-
-def _tool_call_text(name: Any, arguments: Any) -> str:
-    label = name or "tool"
-    if isinstance(arguments, (dict, list)):
-        rendered = json.dumps(arguments, ensure_ascii=False)
-    elif arguments is None:
-        rendered = ""
-    else:
-        rendered = str(arguments)
-    return f"{label}({rendered})"
 
 
 def extract_last_user_message(messages: Any) -> Any:
@@ -152,7 +142,7 @@ def serialize_one_message(message: Any) -> Optional[dict[str, Any]]:
             "role": "assistant",
             # A readable summary so the message bubble isn't empty, plus the
             # structured tool call so pretty renderers can show it as a block.
-            "content": _tool_call_text(name, arguments),
+            "content": tool_call_text(name, arguments),
             "tool_calls": [
                 {
                     "id": message.get("call_id"),
