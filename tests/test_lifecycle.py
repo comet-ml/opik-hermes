@@ -125,19 +125,23 @@ def test_tool_span_named_after_tool(plugin):
 # --- Regression: the bug fixed in #2 ----------------------------------------
 # Before the fix, the root trace was only ended under a content heuristic the
 # per-turn post_llm_call never satisfied, so traces were created but never
-# .end()-ed (end_time stayed null in Opik). These guard that the per-turn
-# signal finalizes and flushes the trace.
+# finalized (end_time stayed null in Opik). These guard that the per-turn
+# signal finalizes and flushes the trace — now via an upsert re-send (same id,
+# output+end_time), not the forbidden trace.update()/trace.end().
 
 
 def test_post_llm_call_finalizes_and_flushes_trace(plugin):
     _run_turn_with_tool(plugin, finalize=True)
     trace = plugin._fake.traces[0]
-    assert trace.ended, "root trace must be ended on the per-turn post_llm_call"
+    assert trace.finalized, "root trace must be finalized on the per-turn post_llm_call"
     assert plugin._fake.flushed >= 1, "finish_trace must flush"
-    output = next(u["output"] for u in trace.updates if "output" in u)
+    assert "output" in trace.finalize_kwargs, "trace output must be set on finalize"
+    assert trace.finalize_kwargs.get("end_time") is not None, (
+        "finalize re-send must carry end_time"
+    )
     # Trace Output uses the OpenAI chat-completion shape so Opik's pretty
     # renderer recognizes it (OPIK-7280) — same as the LLM spans.
-    msg = output["choices"][-1]["message"]
+    msg = trace.finalize_kwargs["output"]["choices"][-1]["message"]
     assert msg["content"] == "here are the files"
 
 
@@ -163,12 +167,49 @@ def test_merge_trace_output_none_stays_none(plugin):
     assert plugin.lifecycle.merge_trace_output(None, state) is None
 
 
+def test_finalize_resend_replays_full_create_payload(plugin):
+    # Regression (OPIK-7279 first attempt): the finalize upsert must replay the
+    # FULL create payload (name/thread_id/input/start_time), not just
+    # output+end_time. An upsert is a whole CreateTraceMessage — a partial
+    # re-send sends the omitted fields as null and the backend's last-write-wins
+    # merge clobbers the create, landing an NA trace (name=None/thread_id=None).
+    # Verified against real Opik: a partial re-send nulled name+thread_id.
+    _run_turn_with_tool(plugin, finalize=True)
+    fk = plugin._fake.traces[0].finalize_kwargs
+    assert fk.get("name"), "finalize re-send must carry name (else NA trace)"
+    assert fk.get("thread_id") == "s", "finalize re-send must carry thread_id"
+    assert fk.get("input") is not None, "finalize re-send must carry input"
+    assert fk.get("start_time") is not None, (
+        "finalize re-send must carry the create's start_time, not a fresh now()"
+    )
+    # And it must be the SAME start_time the trace was created with.
+    ck = plugin._fake.traces[0].create_kwargs
+    assert fk.get("start_time") == ck.get("start_time"), (
+        "finalize start_time must match the create's, not drift to now()"
+    )
+
+
+def test_finalize_is_upsert_not_update_or_end(plugin):
+    # Upsert-only: finalize must be a same-id client.trace(...) re-send, never
+    # trace.update()/trace.end() (FakeTrace raises on those). The re-send targets
+    # the create's id so the SDK coalesces them into one row. This is the fix for
+    # OPIK-7279 — the "may cause data loss" warning is the symptom of an
+    # update() shortly after create.
+    _run_turn_with_tool(plugin, finalize=True)
+    fake = plugin._fake
+    assert len(fake.traces) == 1, "upsert must not mint a second trace"
+    assert not any(e[0] in ("trace.update", "trace.end") for e in fake.events)
+    # Two client.trace calls sharing one id: the create and the finalize re-send.
+    trace_calls = [e for e in fake.events if e[0] == "client.trace"]
+    assert len(trace_calls) == 2, "expected create + finalize re-send"
+
+
 def test_trace_not_finalized_without_turn_end_signal(plugin):
     # Without the per-turn post_llm_call, the trace stays open (matches reality:
     # an interrupted/incomplete turn is not a completed trace).
     _run_turn_with_tool(plugin, finalize=False)
     trace = plugin._fake.traces[0]
-    assert not trace.ended
+    assert not trace.finalized
 
 
 def test_per_api_call_does_not_prematurely_finalize(plugin):
@@ -188,7 +229,7 @@ def test_per_api_call_does_not_prematurely_finalize(plugin):
         model="gpt-5",
         **kw,
     )
-    assert not plugin._fake.traces[0].ended
+    assert not plugin._fake.traces[0].finalized
 
 
 def test_session_id_becomes_thread_id(plugin):
@@ -198,12 +239,12 @@ def test_session_id_becomes_thread_id(plugin):
 
 # --- Regression: NA trace name (the trace-level twin of the NA-span bug) -----
 # The root trace's name/thread_id/input are set only at creation. For a fast
-# turn the create message coalesced with the finalize update()+end() in one SDK
-# batch window, and the trace landed with name=None/thread_id=None/input=null —
-# an "NA" trace in the UI. Confirmed against real Opik: a trace created then
-# immediately updated+ended loses its name, while one whose create is flushed
-# first keeps it. We flush right after trace creation to close the create's
-# batch; these guard that invariant so the bug can't silently return.
+# turn the create message coalesced with the finalize re-send in one SDK batch
+# window, and the trace landed with name=None/thread_id=None/input=null — an
+# "NA" trace in the UI. Confirmed against real Opik: a trace created then
+# immediately re-sent+finalized loses its name, while one whose create is
+# flushed first keeps it. We flush right after trace creation to close the
+# create's batch; these guard that invariant so the bug can't silently return.
 
 
 def test_trace_created_with_name_and_thread(plugin):
@@ -216,19 +257,17 @@ def test_trace_created_with_name_and_thread(plugin):
 
 def test_trace_create_is_flushed_before_finalize(plugin):
     # The fix: the create message must be sent as its own batch, so it cannot
-    # coalesce with the finalize update()/end() and lose name/thread/input.
+    # coalesce with the finalize re-send and lose name/thread/input.
     _run_turn_with_tool(plugin, finalize=True)
     events = plugin._fake.events
     create_idx = next(i for i, e in enumerate(events) if e[0] == "client.trace")
-    # There must be a flush AFTER the create and BEFORE the first trace mutation.
-    first_mutation = next(
-        (i for i, e in enumerate(events) if e[0] in ("trace.update", "trace.end")),
+    # There must be a flush AFTER the create and BEFORE the finalize re-send.
+    finalize_idx = next(
+        (i for i, e in enumerate(events) if e[0] == "trace.upsert"),
         len(events),
     )
-    flush_between = any(
-        e[0] == "flush" for e in events[create_idx + 1 : first_mutation]
-    )
+    flush_between = any(e[0] == "flush" for e in events[create_idx + 1 : finalize_idx])
     assert flush_between, (
-        "trace create must be flushed before any update/end so its "
+        "trace create must be flushed before the finalize re-send so its "
         "name/thread/input survive the batching race"
     )

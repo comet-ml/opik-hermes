@@ -88,14 +88,20 @@ if command -v timeout >/dev/null 2>&1; then TIMEOUT="timeout 180"; else TIMEOUT=
 # No runtime install (the isolated network has no internet). Do NOT run
 # `hermes plugins enable` (it prompts and would hang with no TTY). stdin from
 # /dev/null so any stray prompt gets EOF instead of blocking.
+# Capture the FULL Hermes output (not just the tail) so we can assert the Opik
+# SDK batching warning is absent — the upsert-only lifecycle must not trip it.
+HERMES_LOG="$WORK/hermes.log"
 $TIMEOUT docker run --rm --name e2e-hermes --network "$NET" \
   -e HERMES_UID=0 -e HERMES_GID=0 \
   -v "$HERMES_HOME:/opt/data" \
   "$E2E_IMAGE" \
   sh -c '
     hermes chat -q "Compute 2 to the power 10 and report the number." \
-      --provider openai-api --model gpt-5 2>&1 | tail -20
-  ' < /dev/null || echo "(hermes turn exited non-zero / timed out; assertion judges from the journal)"
+      --provider openai-api --model gpt-5 2>&1
+  ' < /dev/null > "$HERMES_LOG" 2>&1 \
+  || echo "(hermes turn exited non-zero / timed out; assertion judges from the journal)"
+tail -20 "$HERMES_LOG" || true
+cp "$HERMES_LOG" /tmp/opik-e2e-hermes.log 2>/dev/null || true
 
 # Give the SDK background flush a moment to POST to mock-opik.
 sleep 3
@@ -103,6 +109,17 @@ sleep 3
 # Preserve the journal outside the temp dir (trap cleans WORK) for debugging.
 cp "$JOURNAL_DIR/opik-journal.jsonl" /tmp/opik-e2e-journal.jsonl 2>/dev/null || true
 echo "==> journal saved to /tmp/opik-e2e-journal.jsonl ($(wc -l < "$JOURNAL_DIR/opik-journal.jsonl" 2>/dev/null || echo 0) rows)"
+
+# Assert the "may cause data loss" batching warning is absent from Hermes'
+# output — its presence means the plugin regressed to trace.update()/end()
+# shortly after create (OPIK-7279). Matched loosely so wording drift in the SDK
+# still catches it.
+echo "==> asserting no Opik batching warning in Hermes output"
+if grep -Ei "may cause data loss|Calling Trace\.update\(\) shortly after creation" "$HERMES_LOG"; then
+  echo "=== E2E FAILED: Opik batching warning present (lifecycle not upsert-only) ==="
+  exit 1
+fi
+echo "  (no batching warning — lifecycle is upsert-only)"
 
 echo "==> asserting journal"
 MOCK_OPIK_JOURNAL="$JOURNAL_DIR/opik-journal.jsonl" python3 "$REPO_ROOT/e2e/assert_journal.py"

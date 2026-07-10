@@ -103,11 +103,21 @@ docker build -q --build-arg HERMES_IMAGE="$HERMES_IMAGE" \
 
 echo "==> running one Hermes turn (Opik is REAL)"
 if command -v timeout >/dev/null 2>&1; then TIMEOUT="timeout 180"; else TIMEOUT=""; fi
+HERMES_LOG="$WORK/hermes.log"
 $TIMEOUT docker run --rm --name e2e-real-hermes --network "$OPIK_NET" \
   -e HERMES_UID=0 -e HERMES_GID=0 -v "$HERMES_HOME:/opt/data" \
   opik-hermes-e2e:local \
-  sh -c 'hermes chat -q "Compute 2 to the power 10 and report the number." --provider openai-api --model gpt-5 2>&1 | tail -15' \
-  < /dev/null || echo "(hermes turn non-zero/timeout; assertion judges from Opik)"
+  sh -c 'hermes chat -q "Compute 2 to the power 10 and report the number." --provider openai-api --model gpt-5 2>&1' \
+  < /dev/null > "$HERMES_LOG" 2>&1 || echo "(hermes turn non-zero/timeout; assertion judges from Opik)"
+tail -15 "$HERMES_LOG" || true
+
+# Upsert-only lifecycle must not trip the SDK batching warning (OPIK-7279).
+echo "==> asserting no Opik batching warning in Hermes output"
+if grep -Ei "may cause data loss|Calling Trace\.update\(\) shortly after creation" "$HERMES_LOG"; then
+  echo "=== E2E FAILED: Opik batching warning present (lifecycle not upsert-only) ==="
+  exit 1
+fi
+echo "  (no batching warning — lifecycle is upsert-only)"
 
 echo "==> letting the SDK flush, then querying the REAL Opik API"
 sleep 5

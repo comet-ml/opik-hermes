@@ -209,7 +209,8 @@ def on_post_llm_call(
     #     (agent/turn_finalizer.py). It carries `assistant_response` but no
     #     api_call_count, so it never matches a PendingGeneration. This is the
     #     only reliable end-of-turn signal — finalize the root trace here,
-    #     otherwise the trace never .end()s and never surfaces as completed.
+    #     otherwise the trace never gets its finalize re-send (output +
+    #     end_time) and never surfaces as completed.
     if pending is None:
         if state is not None and assistant_response is not None:
             finish_trace(task_key, output={"content": safe_value(assistant_response)})
