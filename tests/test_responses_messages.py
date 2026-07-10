@@ -36,9 +36,16 @@ def test_responses_function_call_item(plugin):
     }
     out = _ser(plugin, [msg])
     assert out[0]["role"] == "assistant"
-    assert out[0]["content"]["tool_call"] == "terminal"
-    assert out[0]["content"]["arguments"] == {"command": "ls"}
-    assert out[0]["content"]["call_id"] == "call_1"
+    # Readable text summary so the message bubble isn't empty ...
+    assert out[0]["content"] == 'terminal({"command": "ls"})'
+    # ... plus the structured tool call for pretty renderers.
+    tc = out[0]["tool_calls"][0]
+    assert tc["name"] == "terminal"
+    assert tc["arguments"] == {"command": "ls"}
+    assert tc["id"] == "call_1"
+    # function.arguments must be a JSON *string* (OpenAI wire format) or the
+    # Opik pretty renderer shows an empty tool-call block.
+    assert tc["function"]["arguments"] == '{"command": "ls"}'
 
 
 def test_responses_function_call_output_item(plugin):
@@ -53,12 +60,11 @@ def test_responses_function_call_output_item(plugin):
     assert out[0]["content"] == {"ok": True}
 
 
-def test_responses_reasoning_item_is_marked_not_null(plugin):
+def test_responses_reasoning_item_dropped(plugin):
+    # Reasoning content is encrypted/opaque — no readable text, so it would
+    # render as an empty bubble. Drop it entirely on the input side.
     out = _ser(plugin, [{"type": "reasoning", "encrypted_content": "xxxxx"}])
-    assert out[0]["role"] == "assistant"
-    assert out[0]["content"] == "[reasoning]"
-    # The bug was these landing as {role: null, content: null}.
-    assert out[0]["content"] is not None
+    assert out == []
 
 
 def test_no_null_role_content_for_responses_payload(plugin):
@@ -84,12 +90,11 @@ def test_no_null_role_content_for_responses_payload(plugin):
         },
     ]
     out = _ser(plugin, payload)
-    assert len(out) == 5
-    # No item is a bare null/null anymore.
+    # Reasoning item is dropped (opaque content); the rest serialize readably.
+    assert len(out) == 4
     assert all(not (m["role"] is None and m["content"] is None) for m in out)
     assert [m["role"] for m in out] == [
         "user",
-        "assistant",
         "assistant",
         "tool",
         "assistant",

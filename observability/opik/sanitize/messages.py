@@ -8,12 +8,33 @@ and wraps values as span-input dicts.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from .values import safe_value
 
 _TRACE_NAME_MAX_CHARS = 60
 _MAX_SERIALIZED_MESSAGES = 12
+
+
+def _json_str(value: Any) -> str:
+    """Render tool-call arguments as a JSON string (OpenAI's wire format)."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return "{}"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _tool_call_text(name: Any, arguments: Any) -> str:
+    label = name or "tool"
+    if isinstance(arguments, (dict, list)):
+        rendered = json.dumps(arguments, ensure_ascii=False)
+    elif arguments is None:
+        rendered = ""
+    else:
+        rendered = str(arguments)
+    return f"{label}({rendered})"
 
 
 def extract_last_user_message(messages: Any) -> Any:
@@ -125,15 +146,25 @@ def serialize_one_message(message: Any) -> Optional[dict[str, Any]]:
 
     # Responses-API typed items (codex_responses mode).
     if item_type == "function_call":
+        name = message.get("name")
+        arguments = safe_value(message.get("arguments"), parse_json_strings=True)
         return {
             "role": "assistant",
-            "content": {
-                "tool_call": message.get("name"),
-                "arguments": safe_value(
-                    message.get("arguments"), parse_json_strings=True
-                ),
-                "call_id": message.get("call_id"),
-            },
+            # A readable summary so the message bubble isn't empty, plus the
+            # structured tool call so pretty renderers can show it as a block.
+            "content": _tool_call_text(name, arguments),
+            "tool_calls": [
+                {
+                    "id": message.get("call_id"),
+                    "type": "function",
+                    "name": name,
+                    "arguments": arguments,
+                    # function.arguments must be a JSON *string* — that's OpenAI's
+                    # wire format and what Opik's pretty renderer requires to show
+                    # the tool-call block (an object triggers an empty fallback).
+                    "function": {"name": name, "arguments": _json_str(arguments)},
+                }
+            ],
         }
     if item_type == "function_call_output":
         return {
@@ -142,7 +173,10 @@ def serialize_one_message(message: Any) -> Optional[dict[str, Any]]:
             "content": safe_value(message.get("output"), parse_json_strings=True),
         }
     if item_type == "reasoning":
-        return {"role": "assistant", "content": "[reasoning]"}
+        # Reasoning items carry only encrypted/opaque content — there is no
+        # readable text to show on the input side, so they'd render as an empty
+        # bubble. Drop them; real reasoning is captured on the LLM-span output.
+        return None
     if item_type == "message":
         return {
             "role": message.get("role"),
