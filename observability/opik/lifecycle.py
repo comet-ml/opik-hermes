@@ -12,7 +12,11 @@ from typing import Any
 
 from .client import get_client
 from .config import debug, project_name, tags
-from .sanitize import extract_last_user_message, trace_name_from_messages
+from .sanitize import (
+    assistant_output,
+    extract_last_user_message,
+    trace_name_from_messages,
+)
 from .state import TraceState, lock, store
 
 
@@ -75,11 +79,15 @@ def flush_trace_create(client: Any) -> None:
 
 
 def merge_trace_output(output: Any, state: TraceState) -> Any:
-    if not state.turn_tool_calls:
-        return output
-    merged = dict(output) if isinstance(output, dict) else {"content": output}
-    merged["tool_calls"] = list(state.turn_tool_calls)
-    return merged
+    if output is None and not state.turn_tool_calls:
+        return None
+    if isinstance(output, dict):
+        content = output.get("content", output)
+    else:
+        content = output
+    # Same OpenAI chat-completion shape as the LLM spans so Opik's pretty
+    # renderer recognizes the trace Output too (reads choices[-1].message.content).
+    return assistant_output(content=content, tool_calls=list(state.turn_tool_calls))
 
 
 def finish_trace(task_key: str, *, output: Any = None) -> None:
@@ -99,11 +107,7 @@ def finish_trace(task_key: str, *, output: Any = None) -> None:
         # so we simply drop them rather than emit a partial span.
         final_output = merge_trace_output(output, state)
         if final_output is not None:
-            state.trace.update(
-                output=final_output
-                if isinstance(final_output, dict)
-                else {"content": final_output}
-            )
+            state.trace.update(output=final_output)
         state.trace.end()
     except Exception as exc:  # pragma: no cover - fail-open
         debug(f"finish trace failed: {exc}")
