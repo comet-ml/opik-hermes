@@ -17,9 +17,11 @@ Both are kept so the suite passes against old and new Hermes images alike.
 
 It also probes GET /v1/models and POST /api/show (Ollama-style).
 
-Deterministic two-step interaction, identical on either protocol:
-  call 1  -> a tool call      (Hermes runs a tool  -> tool span)
-  call 2+ -> assistant text   (turn completes)
+Deterministic two-step interaction, identical on either protocol. The stage is
+derived from the request body (has the tool result come back yet?), not from a
+call counter, so it is both concurrency-safe and stable across retries:
+  no tool result yet -> a tool call     (Hermes runs a tool -> tool span)
+  tool result present -> assistant text (turn completes)
 
 That yields one LLM -> tool -> LLM cycle: a root trace with two LLM spans and
 one tool span. No real model, no key, no external network.
@@ -36,8 +38,34 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("MOCK_LLM_PORT", "18790"))
-_STATE = {"calls": 0}
 _USAGE = {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28}
+
+
+def _already_ran_tool(payload: bytes) -> bool:
+    """Has the tool already run in this conversation?
+
+    The stage is derived from the request body rather than a call counter.
+    A counter is wrong on two axes: `ThreadingHTTPServer` can serve requests
+    concurrently, and a retried/aborted call would consume the tool stage and
+    leave the retry to get the final message — silently producing a run with
+    no tool span. Reading the conversation is idempotent, so a retry of the
+    same request always gets the same stage back.
+
+    Turn 1 carries only the user message; turn 2 carries the tool result
+    (Responses: a `function_call_output` input item; Chat Completions: a
+    `role: "tool"` message).
+    """
+    try:
+        data = json.loads(payload or b"{}")
+    except ValueError:
+        return False
+
+    for item in data.get("input") or data.get("messages") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "function_call_output" or item.get("role") == "tool":
+            return True
+    return False
 
 
 def _tool_call_chunks():
@@ -186,11 +214,10 @@ class Handler(BaseHTTPRequestHandler):
 
         # Responses API (codex_responses api_mode).
         if self.path.rstrip("/").endswith("/responses"):
-            _STATE["calls"] += 1
             events = (
-                _responses_tool_events()
-                if _STATE["calls"] == 1
-                else _responses_final_events()
+                _responses_final_events()
+                if _already_ran_tool(body)
+                else _responses_tool_events()
             )
             wants_stream = b'"stream": true' in body or b'"stream":true' in body
             if wants_stream:
@@ -204,8 +231,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # Chat Completions (the other wire Hermes may pick).
         if "chat/completions" in self.path:
-            _STATE["calls"] += 1
-            chunks = _tool_call_chunks() if _STATE["calls"] == 1 else _final_chunks()
+            chunks = _final_chunks() if _already_ran_tool(body) else _tool_call_chunks()
             wants_stream = b'"stream": true' in body or b'"stream":true' in body
             if wants_stream:
                 self._sse(chunks)
