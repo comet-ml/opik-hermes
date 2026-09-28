@@ -93,50 +93,10 @@ jobs:
             echo "to=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
           fi
 
-      # --- Token preflight ---------------------------------------------------
-      # Fail fast with an actionable message rather than reaching the upload
-      # step with a malformed token. Probes the matching upload endpoint:
-      # 400/422 = auth OK + empty payload (success for a preflight),
-      # 401/403 = token rejected.
-      #
-      # No token => Trusted Publishing (OIDC): there is nothing to preflight, so
-      # skip the probe entirely (and DON'T POST to the upload endpoint — that
-      # request counts against PyPI's upload rate limit even though it can't
-      # authenticate anything). The action + PyPI handle OIDC auth at upload.
-      - name: Token preflight
-        env:
-          TARGET: ${{ steps.target.outputs.to }}
-          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        run: |
-          set -e
-          if [ "$TARGET" = "pypi" ]; then
-            TOKEN="$PYPI_TOKEN"; URL="https://upload.pypi.org/legacy/"; NAME="PYPI_API_TOKEN"
-          else
-            TOKEN="$TEST_PYPI_TOKEN"; URL="https://test.pypi.org/legacy/"; NAME="TEST_PYPI_API_TOKEN"
-          fi
-          if [ -z "${TOKEN:-}" ]; then
-            echo "No $NAME set — assuming Trusted Publishing (OIDC) for $TARGET; skipping token preflight."
-            exit 0
-          fi
-          if [[ "$TOKEN" != pypi-* ]]; then
-            echo "::error title=Publish preflight::$NAME is set but does not start with 'pypi-'."
-            exit 1
-          fi
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            -u "__token__:${TOKEN}" -H "User-Agent: opik-hermes-release-preflight" "$URL" || echo "000")
-          echo "Preflight HTTP $CODE against $URL"
-          case "$CODE" in
-            400|422|200) echo "Token accepted by $TARGET." ;;
-            401|403) echo "::error title=Publish preflight::$NAME rejected by $TARGET (HTTP $CODE)."; exit 1 ;;
-            *) echo "::warning title=Publish preflight::Unexpected HTTP $CODE; proceeding to upload." ;;
-          esac
-
       - name: Publish to TestPyPI
         if: steps.target.outputs.to == 'testpypi'
         uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
-          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
 
@@ -144,5 +104,4 @@ jobs:
         if: steps.target.outputs.to == 'pypi'
         uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
