@@ -17,7 +17,8 @@ run-name: "Release opik-hermes by @${{ github.actor }}"
 #      tag must not already exist.
 #   3. Write the version into pyproject.toml and commit to main.
 #   4. Tag that commit vX.Y.Z and push.
-#   5. Call publish.yml (builds the tagged source, uploads to PyPI).
+#   5. Build the tagged source and upload to PyPI (in this workflow — see the
+#      publish job's comment for why it can't call publish.yml).
 #   6. Publish the GitHub Release (release-drafter notes) at the tag.
 #
 # publish.yml stays independently usable: workflow_dispatch for a TestPyPI
@@ -149,19 +150,64 @@ jobs:
           git push --no-verify origin HEAD:main
           git push --no-verify origin "$TAG"
 
+  # The upload runs HERE, as a top-level job, rather than by calling
+  # publish.yml. PyPI Trusted Publishing does not support reusable workflows:
+  # the OIDC exchange itself succeeds (PyPI matches the `workflow` claim), but
+  # the Sigstore certificate minted for the attestation records the CALLER's
+  # workflow (release.yml), so PyPI's attestation check fails the upload with a
+  # bare `400 Bad Request` — exactly what run 29080606866 hit, after bump-tag
+  # had already pushed the tag. See pypi/warehouse#11096.
+  #
+  # publish.yml stays as-is for its own triggers (workflow_dispatch dry-runs and
+  # the release:published fallback), where it is top-level and works.
   publish:
     needs:
       - resolve-version
       - bump-tag
     if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
-      id-token: write
-    uses: ./.github/workflows/publish.yml
-    secrets: inherit
-    with:
-      target: pypi
-      ref: refs/tags/${{ needs.resolve-version.outputs.tag }}
+      id-token: write        # mint the OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Build the tagged source bump-tag just pushed, not main's HEAD.
+          ref: refs/tags/${{ needs.resolve-version.outputs.tag }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # bump-tag wrote pyproject.toml and tagged that same commit, so a mismatch
+      # here means the tag and the built artifact disagree about the version.
+      - name: Tag matches pyproject version
+        env:
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          FILE_VER=$(./scripts/pyproject-version.sh)
+          TAG_VER="${TAG#v}"
+          if [ "$FILE_VER" != "$TAG_VER" ]; then
+            echo "::error title=Version mismatch::Release tag v$TAG_VER != pyproject version $FILE_VER."
+            exit 1
+          fi
+          echo "OK: tag v$TAG_VER matches pyproject version $FILE_VER"
+
+      - name: Build sdist + wheel
+        run: |
+          pip install -U pip build
+          python -m build --sdist --wheel --outdir dist/ .
+
+      - name: Verify the plugin entry point loads (install wheel, then check)
+        run: |
+          pip install dist/*.whl
+          python e2e/assert_entrypoint.py
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          skip-existing: true
 
   publish-github-release:
     needs:

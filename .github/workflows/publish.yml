@@ -2,16 +2,18 @@ name: Publish
 
 run-name: "Publish opik-hermes (${{ github.event_name }}) by @${{ github.actor }}"
 
-# Build + upload the package. Three entry points:
-#   - workflow_call: invoked by release.yml as the publish step of a real
-#     release (target=pypi). release.yml has already bumped pyproject.toml and
-#     created the vX.Y.Z tag, so the tag-vs-pyproject guard below holds.
+# Build + upload the package. Two entry points:
 #   - workflow_dispatch: manual dry-run to TestPyPI (default) — run from any
 #     branch to exercise the full build→upload→install flow before releasing.
 #     Bump pyproject.toml first so the upload doesn't collide (skip-existing
 #     turns a duplicate into a no-op rather than a failure).
 #   - release: published: fallback for a release published by hand in the
 #     GitHub UI (release.yml is the normal path). Publishes to PyPI.
+#
+# Deliberately NOT workflow_call-able: PyPI Trusted Publishing does not support
+# reusable workflows (pypi/warehouse#11096) — the OIDC exchange succeeds, then
+# the upload 400s because the attestation certificate names the caller. The
+# one-click release therefore does its own upload inside release.yml.
 on:
   release:
     types: [published]
@@ -22,16 +24,6 @@ on:
         type: choice
         options: [testpypi, pypi]
         default: testpypi
-  workflow_call:
-    inputs:
-      target:
-        description: "Where to publish (release.yml passes pypi)"
-        type: string
-        required: true
-      ref:
-        description: "Git ref to build from (release.yml passes the release tag)"
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -44,9 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # workflow_call passes the release tag so we build the tagged source;
-          # other triggers default to the event's ref.
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -55,13 +45,12 @@ jobs:
       # On a real release the git tag (vX.Y.Z) and pyproject.toml's version
       # must agree — the wheel is built from pyproject, so a mismatch would
       # tag one version while `skip-existing` silently no-ops the upload of the
-      # already-published one. Fail loudly instead. Applies to the release
-      # event and to workflow_call runs that build from a tag ref.
+      # already-published one. Fail loudly instead.
       - name: Tag matches pyproject version (release only)
-        if: github.event_name == 'release' || startsWith(inputs.ref, 'refs/tags/')
+        if: github.event_name == 'release'
         run: |
           FILE_VER=$(./scripts/pyproject-version.sh)
-          REF="${{ inputs.ref || github.ref_name }}"
+          REF="${{ github.ref_name }}"
           TAG_VER="${REF#refs/tags/}"
           TAG_VER="${TAG_VER#v}"
           if [ "$FILE_VER" != "$TAG_VER" ]; then
@@ -82,7 +71,6 @@ jobs:
 
       # --- Decide target -----------------------------------------------------
       # release          -> pypi
-      # workflow_call     -> the passed input (release.yml sends pypi)
       # workflow_dispatch -> the chosen input
       - name: Resolve publish target
         id: target
