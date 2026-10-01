@@ -2,13 +2,9 @@ name: Publish
 
 run-name: "Publish opik-hermes (${{ github.event_name }}) by @${{ github.actor }}"
 
-# Build + upload the package. Two entry points:
-#   - workflow_dispatch: manual dry-run to TestPyPI (default) — run from any
-#     branch to exercise the full build→upload→install flow before releasing.
-#     Bump pyproject.toml first so the upload doesn't collide (skip-existing
-#     turns a duplicate into a no-op rather than a failure).
-#   - release: published: fallback for a release published by hand in the
-#     GitHub UI (release.yml is the normal path). Publishes to PyPI.
+# Build + upload the package to PyPI when a GitHub Release is published by hand
+# in the UI. release.yml is the normal path; this is the fallback, and the
+# recovery path if release.yml's upload fails after its tag was pushed.
 #
 # Deliberately NOT workflow_call-able: PyPI Trusted Publishing does not support
 # reusable workflows (pypi/warehouse#11096) — the OIDC exchange succeeds, then
@@ -17,13 +13,6 @@ run-name: "Publish opik-hermes (${{ github.event_name }}) by @${{ github.actor }
 on:
   release:
     types: [published]
-  workflow_dispatch:
-    inputs:
-      target:
-        description: "Where to publish"
-        type: choice
-        options: [testpypi, pypi]
-        default: testpypi
 
 permissions:
   contents: read
@@ -35,24 +24,21 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # On a real release the git tag (vX.Y.Z) and pyproject.toml's version
-      # must agree — the wheel is built from pyproject, so a mismatch would
-      # tag one version while `skip-existing` silently no-ops the upload of the
+      # The git tag (vX.Y.Z) and pyproject.toml's version must agree — the
+      # wheel is built from pyproject, so a mismatch would tag one version
+      # while `skip-existing` silently no-ops the upload of the
       # already-published one. Fail loudly instead.
-      - name: Tag matches pyproject version (release only)
-        if: github.event_name == 'release'
+      - name: Tag matches pyproject version
+        env:
+          REF: ${{ github.ref_name }}
         run: |
           FILE_VER=$(./scripts/pyproject-version.sh)
-          REF="${{ github.ref_name }}"
-          TAG_VER="${REF#refs/tags/}"
-          TAG_VER="${TAG_VER#v}"
+          TAG_VER="${REF#v}"
           if [ "$FILE_VER" != "$TAG_VER" ]; then
             echo "::error title=Version mismatch::Release tag v$TAG_VER != pyproject version $FILE_VER. Bump pyproject.toml to match the tag before publishing."
             exit 1
@@ -69,27 +55,8 @@ jobs:
           pip install dist/*.whl
           python e2e/assert_entrypoint.py
 
-      # --- Decide target -----------------------------------------------------
-      # release          -> pypi
-      # workflow_dispatch -> the chosen input
-      - name: Resolve publish target
-        id: target
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "to=pypi" >> "$GITHUB_OUTPUT"
-          else
-            echo "to=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish to TestPyPI
-        if: steps.target.outputs.to == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@v1.12.4
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
-
+      # skip-existing: a recovery run may follow a partial upload by release.yml.
       - name: Publish to PyPI
-        if: steps.target.outputs.to == 'pypi'
         uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
           skip-existing: true

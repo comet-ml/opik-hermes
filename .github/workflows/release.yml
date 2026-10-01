@@ -21,8 +21,7 @@ run-name: "Release opik-hermes by @${{ github.actor }}"
 #      publish job's comment for why it can't call publish.yml).
 #   6. Publish the GitHub Release (release-drafter notes) at the tag.
 #
-# publish.yml stays independently usable: workflow_dispatch for a TestPyPI
-# dry-run, and release:published as a manual fallback.
+# publish.yml stays independently usable as the release:published fallback.
 on:
   workflow_dispatch:
     inputs:
@@ -158,8 +157,11 @@ jobs:
   # bare `400 Bad Request` — exactly what run 29080606866 hit, after bump-tag
   # had already pushed the tag. See pypi/warehouse#11096.
   #
-  # publish.yml stays as-is for its own triggers (workflow_dispatch dry-runs and
-  # the release:published fallback), where it is top-level and works.
+  # publish.yml stays as-is for the release:published fallback, where it is
+  # top-level and works.
+  #
+  # Recovery: if this job fails after bump-tag pushed the tag, publish the
+  # GitHub Release for that tag by hand; publish.yml then does the upload.
   publish:
     needs:
       - resolve-version
@@ -204,10 +206,13 @@ jobs:
           pip install dist/*.whl
           python e2e/assert_entrypoint.py
 
+      # skip-existing: false — resolve-version proved this version is new, so
+      # an existing file means something outside this flow uploaded it. Fail
+      # rather than release over an unverified package.
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
-          skip-existing: true
+          skip-existing: false
 
   publish-github-release:
     needs:
