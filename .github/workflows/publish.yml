@@ -2,36 +2,17 @@ name: Publish
 
 run-name: "Publish opik-hermes (${{ github.event_name }}) by @${{ github.actor }}"
 
-# Build + upload the package. Three entry points:
-#   - workflow_call: invoked by release.yml as the publish step of a real
-#     release (target=pypi). release.yml has already bumped pyproject.toml and
-#     created the vX.Y.Z tag, so the tag-vs-pyproject guard below holds.
-#   - workflow_dispatch: manual dry-run to TestPyPI (default) — run from any
-#     branch to exercise the full build→upload→install flow before releasing.
-#     Bump pyproject.toml first so the upload doesn't collide (skip-existing
-#     turns a duplicate into a no-op rather than a failure).
-#   - release: published: fallback for a release published by hand in the
-#     GitHub UI (release.yml is the normal path). Publishes to PyPI.
+# Build + upload the package to PyPI when a GitHub Release is published by hand
+# in the UI. release.yml is the normal path; this is the fallback, and the
+# recovery path if release.yml's upload fails after its tag was pushed.
+#
+# Deliberately NOT workflow_call-able: PyPI Trusted Publishing does not support
+# reusable workflows (pypi/warehouse#11096) — the OIDC exchange succeeds, then
+# the upload 400s because the attestation certificate names the caller. The
+# one-click release therefore does its own upload inside release.yml.
 on:
   release:
     types: [published]
-  workflow_dispatch:
-    inputs:
-      target:
-        description: "Where to publish"
-        type: choice
-        options: [testpypi, pypi]
-        default: testpypi
-  workflow_call:
-    inputs:
-      target:
-        description: "Where to publish (release.yml passes pypi)"
-        type: string
-        required: true
-      ref:
-        description: "Git ref to build from (release.yml passes the release tag)"
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -43,27 +24,21 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          # workflow_call passes the release tag so we build the tagged source;
-          # other triggers default to the event's ref.
-          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # On a real release the git tag (vX.Y.Z) and pyproject.toml's version
-      # must agree — the wheel is built from pyproject, so a mismatch would
-      # tag one version while `skip-existing` silently no-ops the upload of the
-      # already-published one. Fail loudly instead. Applies to the release
-      # event and to workflow_call runs that build from a tag ref.
-      - name: Tag matches pyproject version (release only)
-        if: github.event_name == 'release' || startsWith(inputs.ref, 'refs/tags/')
+      # The git tag (vX.Y.Z) and pyproject.toml's version must agree — the
+      # wheel is built from pyproject, so a mismatch would tag one version
+      # while `skip-existing` silently no-ops the upload of the
+      # already-published one. Fail loudly instead.
+      - name: Tag matches pyproject version
+        env:
+          REF: ${{ github.ref_name }}
         run: |
           FILE_VER=$(./scripts/pyproject-version.sh)
-          REF="${{ inputs.ref || github.ref_name }}"
-          TAG_VER="${REF#refs/tags/}"
-          TAG_VER="${TAG_VER#v}"
+          TAG_VER="${REF#v}"
           if [ "$FILE_VER" != "$TAG_VER" ]; then
             echo "::error title=Version mismatch::Release tag v$TAG_VER != pyproject version $FILE_VER. Bump pyproject.toml to match the tag before publishing."
             exit 1
@@ -80,69 +55,8 @@ jobs:
           pip install dist/*.whl
           python e2e/assert_entrypoint.py
 
-      # --- Decide target -----------------------------------------------------
-      # release          -> pypi
-      # workflow_call     -> the passed input (release.yml sends pypi)
-      # workflow_dispatch -> the chosen input
-      - name: Resolve publish target
-        id: target
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "to=pypi" >> "$GITHUB_OUTPUT"
-          else
-            echo "to=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      # --- Token preflight ---------------------------------------------------
-      # Fail fast with an actionable message rather than reaching the upload
-      # step with a malformed token. Probes the matching upload endpoint:
-      # 400/422 = auth OK + empty payload (success for a preflight),
-      # 401/403 = token rejected.
-      #
-      # No token => Trusted Publishing (OIDC): there is nothing to preflight, so
-      # skip the probe entirely (and DON'T POST to the upload endpoint — that
-      # request counts against PyPI's upload rate limit even though it can't
-      # authenticate anything). The action + PyPI handle OIDC auth at upload.
-      - name: Token preflight
-        env:
-          TARGET: ${{ steps.target.outputs.to }}
-          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        run: |
-          set -e
-          if [ "$TARGET" = "pypi" ]; then
-            TOKEN="$PYPI_TOKEN"; URL="https://upload.pypi.org/legacy/"; NAME="PYPI_API_TOKEN"
-          else
-            TOKEN="$TEST_PYPI_TOKEN"; URL="https://test.pypi.org/legacy/"; NAME="TEST_PYPI_API_TOKEN"
-          fi
-          if [ -z "${TOKEN:-}" ]; then
-            echo "No $NAME set — assuming Trusted Publishing (OIDC) for $TARGET; skipping token preflight."
-            exit 0
-          fi
-          if [[ "$TOKEN" != pypi-* ]]; then
-            echo "::error title=Publish preflight::$NAME is set but does not start with 'pypi-'."
-            exit 1
-          fi
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            -u "__token__:${TOKEN}" -H "User-Agent: opik-hermes-release-preflight" "$URL" || echo "000")
-          echo "Preflight HTTP $CODE against $URL"
-          case "$CODE" in
-            400|422|200) echo "Token accepted by $TARGET." ;;
-            401|403) echo "::error title=Publish preflight::$NAME rejected by $TARGET (HTTP $CODE)."; exit 1 ;;
-            *) echo "::warning title=Publish preflight::Unexpected HTTP $CODE; proceeding to upload." ;;
-          esac
-
-      - name: Publish to TestPyPI
-        if: steps.target.outputs.to == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@v1.12.4
-        with:
-          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
-
+      # skip-existing: a recovery run may follow a partial upload by release.yml.
       - name: Publish to PyPI
-        if: steps.target.outputs.to == 'pypi'
         uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
