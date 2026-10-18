@@ -8,7 +8,11 @@ ARG HERMES_IMAGE=nousresearch/hermes-agent:latest
 FROM ${HERMES_IMAGE}
 
 # Install the opik SDK into Hermes' own venv (build-time = has network).
-RUN /opt/hermes/.venv/bin/python -m pip install --no-cache-dir opik \
+# Current Hermes images ship the venv without pip and keep uv internal to their
+# package manager, so bootstrap pip from the stdlib; older images without
+# ensurepip still have uv on PATH.
+RUN { /opt/hermes/.venv/bin/python -m ensurepip \
+      && /opt/hermes/.venv/bin/python -m pip install --no-cache-dir opik; } \
     || uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir opik
 
 # Ship the plugin as a bundled user plugin. /opt/data is the Hermes home

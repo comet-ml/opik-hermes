@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,12 @@ def _load_plugin_module():
     A unique module name per load avoids importlib's module cache so each test
     starts with clean module-global state (``_TRACE_STATE``, ``_OPIK_CLIENT``).
     """
+    # Hermes registers the ``hermes_plugins`` namespace before loading plugins;
+    # Python 3.14+ requires the parent to exist for the plugin's relative imports.
+    if "hermes_plugins" not in sys.modules:
+        parent = types.ModuleType("hermes_plugins")
+        parent.__path__ = []
+        sys.modules["hermes_plugins"] = parent
     name = f"hermes_plugins.opik_test_{len(sys.modules)}"
     spec = importlib.util.spec_from_file_location(name, PLUGIN_PATH)
     assert spec and spec.loader
