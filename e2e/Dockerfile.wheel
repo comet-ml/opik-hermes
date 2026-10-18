@@ -10,8 +10,10 @@ ARG HERMES_IMAGE=nousresearch/hermes-agent:latest
 FROM ${HERMES_IMAGE}
 
 COPY dist/ /tmp/opik-hermes-dist/
-RUN /opt/hermes/.venv/bin/python -m pip install --no-cache-dir /tmp/opik-hermes-dist/*.whl \
-    || uv pip install --python /opt/hermes/.venv/bin/python --no-cache-dir /tmp/opik-hermes-dist/*.whl
+# Hermes' image venv ships without pip and keeps uv internal to its package
+# manager, so bootstrap pip from the stdlib.
+RUN /opt/hermes/.venv/bin/python -m ensurepip \
+    && /opt/hermes/.venv/bin/python -m pip install --no-cache-dir /tmp/opik-hermes-dist/*.whl
 
 # Build-time guard for the entry-point-loading contract, using the SAME shared
 # check as ci.yml/publish.yml (single source of truth): it does ep.load() then
