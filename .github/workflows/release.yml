@@ -46,7 +46,7 @@ jobs:
       version: ${{ steps.compute.outputs.version }}      # X.Y.Z (no leading v)
       tag: ${{ steps.compute.outputs.tag }}              # vX.Y.Z
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 0        # need full tag history
@@ -105,12 +105,12 @@ jobs:
     permissions:
       contents: write        # commit the bump + push the tag to main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -173,12 +173,12 @@ jobs:
       contents: read
       id-token: write        # mint the OIDC token for Trusted Publishing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Build the tagged source bump-tag just pushed, not main's HEAD.
           ref: refs/tags/${{ needs.resolve-version.outputs.tag }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -210,7 +210,7 @@ jobs:
       # an existing file means something outside this flow uploaded it. Fail
       # rather than release over an unverified package.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.12.4
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
         with:
           skip-existing: false
 
@@ -233,7 +233,7 @@ jobs:
       # the published release points at a real tag.
       - name: Draft release notes
         id: draft
-        uses: release-drafter/release-drafter@v6.1.0
+        uses: release-drafter/release-drafter@b1476f6e6eb133afa41ed8589daba6dc69b4d3f5 # v6.1.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
